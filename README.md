@@ -76,7 +76,8 @@ A1:A6 (dates)          B1:B6  =FXRANGE("EURUSD", A1:A6)
   `decimal`; null or zero closes are dropped.
 - Responses are classified by HTTP status: 400/404/410 (or an inline error on a 200) means the request cannot
   succeed, so it fails immediately with Yahoo's message. Timeouts, throttling and 5xx are retried three times
-  with a doubling delay, and a timeout is reported as a timeout rather than as an Excel cancellation.
+  with a doubling delay (15 second timeout per attempt, so at worst ~45 seconds of `#GETTING_DATA`), and a
+  timeout is reported as a timeout rather than as an Excel cancellation.
 - A payload that does not have the expected shape (missing `close` array, different timestamp and close
   counts) is an error, never `#N/A` — a broken response must not look like a day without a fixing.
 

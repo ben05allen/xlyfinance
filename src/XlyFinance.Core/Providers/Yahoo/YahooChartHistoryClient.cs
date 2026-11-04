@@ -28,6 +28,12 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
     private const string UserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+    /// <summary>
+    /// Per-attempt limit. The provider retries, so the worst case for a dead network is three of these,
+    /// and each attempt is spent while Excel shows #GETTING_DATA rather than blocking the UI.
+    /// </summary>
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
+
     private static readonly HttpClient SharedHttpClient = CreateHttpClient();
 
     private readonly HttpClient _httpClient;
@@ -282,7 +288,7 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
     {
         var client = new HttpClient
         {
-            Timeout = TimeSpan.FromSeconds(30),
+            Timeout = RequestTimeout,
         };
 
         client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);

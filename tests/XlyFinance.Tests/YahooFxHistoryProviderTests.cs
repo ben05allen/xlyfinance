@@ -73,7 +73,7 @@ public class YahooFxHistoryProviderTests
     {
         // HttpClient surfaces its own timeout as a cancellation with the caller's token untouched.
         var client = new FakeYahooHistoryClient((_, _, _, _) =>
-            throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 30 seconds elapsing."));
+            throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 15 seconds elapsing."));
 
         var exception = await Assert.ThrowsAsync<FxDataException>(
             async () => await CreateProvider(client, maxAttempts: 3).GetDailyRatesAsync("EURUSD=X", Start, End));
