@@ -33,8 +33,11 @@ public static class FxFunctions
     [ExcelFunction(
         Name = "FXRATES",
         Category = Category,
-        Description = "Loads daily FX closing rates from Yahoo Finance. Returns a two column array: date (serial) and close.",
-        IsThreadSafe = true)]
+        Description = "Loads daily FX closing rates from Yahoo Finance. Returns a two column array: date (serial) and close.")]
+    // NOT IsThreadSafe on purpose: Excel-DNA's async support is RTD based, and calling it from a
+    // thread-safe UDF lets Excel invoke it on a worker thread while the RTD COM registration is in
+    // progress, which surfaces as "RTD server ... could not be registered" (Excel-DNA #667). The work
+    // already happens on the thread pool, so serialising the call itself costs nothing.
     public static object FxRates(
         [ExcelArgument(Name = "pair", Description = "Currency pair, for example \"EURUSD\" or \"EUR/USD\".")] object pair,
         [ExcelArgument(Name = "start_date", Description = "First date to include, for example \"2024-01-01\".")] object startDate,
@@ -64,8 +67,8 @@ public static class FxFunctions
     [ExcelFunction(
         Name = "FXRANGE",
         Category = Category,
-        Description = "Returns the daily FX closing rate for each date in a range, laid out like the range. #N/A where a date has no fixing.",
-        IsThreadSafe = true)]
+        Description = "Returns the daily FX closing rate for each date in a range, laid out like the range. #N/A where a date has no fixing.")]
+    // See the note on FxRates: async + IsThreadSafe is what breaks RTD registration.
     public static object FxRange(
         [ExcelArgument(Name = "pair", Description = "Currency pair, for example \"EURUSD\" or \"EUR/USD\".")] object pair,
         [ExcelArgument(Name = "dates", Description = "One date, or a range of dates to look up.")] object dates)

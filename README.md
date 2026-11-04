@@ -188,6 +188,12 @@ an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block 
 Only `XlyFinance.AddIn` is Windows specific (`net10.0-windows`), because Excel-DNA builds the `.xll` there.
 Building the add-in off Windows needs `dotnet build -p:EnableWindowsTargeting=true`.
 
+The two async UDFs (`FXRATES`, `FXRANGE`) are deliberately **not** marked `IsThreadSafe`. Excel-DNA's async
+support is RTD based, and letting Excel call it from a worker thread races with the RTD COM registration, which
+shows up as `RTD server ... could not be registered` in the diagnostics log (Excel-DNA issue #667). The slow work
+already runs on the thread pool, so there is nothing to gain from the flag. `FXSYMBOL`/`FXLASTERROR` are pure, so
+they do keep it.
+
 `dotnet test` covers the domain, the retry policy and the JSON mapping; it does not call Yahoo. The live path
 was checked by hand against `EURUSD=X` (see the example above), including a weekend-only window and a bogus
 ticker.
