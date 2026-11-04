@@ -56,7 +56,29 @@ public class YahooChartHistoryClientTests
     }
 
     [Fact]
-    public async Task Shifts_timestamps_by_the_reported_exchange_offset()
+    public async Task Dates_bars_with_the_timezone_rules_in_force_on_each_date()
+    {
+        // Both bars are stamped at local midnight in London: 23:00 UTC during BST, 00:00 UTC during GMT.
+        // A fixed gmtoffset would put the summer bar on 30 June instead of 1 July.
+        const string payload = """
+            {"chart":{"result":[{"meta":{"gmtoffset":0,"exchangeTimezoneName":"Europe/London"},
+            "timestamp":[1719788400,1704067200],
+            "indicators":{"quote":[{"close":[1.0735257863998413,1.1055831909179688]}]}}],"error":null}}
+            """;
+
+        var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
+
+        var bars = await client.GetDailyBarsAsync(
+            "EURUSD=X",
+            new DateOnly(2024, 1, 1),
+            new DateOnly(2024, 7, 1));
+
+        Assert.Equal(new DateOnly(2024, 7, 1), bars[0].Date);
+        Assert.Equal(new DateOnly(2024, 1, 1), bars[1].Date);
+    }
+
+    [Fact]
+    public async Task Falls_back_to_the_reported_offset_when_the_timezone_is_unknown()
     {
         // gmtoffset +3600 with a 23:00 UTC timestamp means the bar belongs to the next day locally.
         const string payload = """
@@ -89,13 +111,47 @@ public class YahooChartHistoryClientTests
     }
 
     [Fact]
-    public async Task Treats_server_errors_as_retryable()
+    public async Task Treats_a_json_server_error_as_retryable()
+    {
+        // Yahoo wraps temporary outages in the same error object it uses for unknown symbols,
+        // so the status code has to decide, not the body.
+        const string payload = """
+            {"chart":{"result":null,"error":{"code":"Internal Server Error","description":"Temporary outage"}}}
+            """;
+
+        var handler = StubHttpMessageHandler.Json(payload, HttpStatusCode.ServiceUnavailable);
+        var client = new YahooChartHistoryClient(new HttpClient(handler));
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+            async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+
+        Assert.Contains("503", exception.Message);
+        Assert.Contains("Temporary outage", exception.Message);
+    }
+
+    [Fact]
+    public async Task Treats_an_html_server_error_as_retryable()
     {
         var client = new YahooChartHistoryClient(
             new HttpClient(StubHttpMessageHandler.NotJson("<html>upstream unavailable</html>", HttpStatusCode.BadGateway)));
 
         await Assert.ThrowsAsync<HttpRequestException>(
             async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+    }
+
+    [Fact]
+    public async Task Treats_a_200_with_an_inline_error_as_permanent()
+    {
+        const string payload = """
+            {"chart":{"result":null,"error":{"code":"Bad Request","description":"Invalid interval"}}}
+            """;
+
+        var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
+
+        var exception = await Assert.ThrowsAsync<FxDataException>(
+            async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+
+        Assert.Contains("Invalid interval", exception.Message);
     }
 
     [Fact]
@@ -106,6 +162,50 @@ public class YahooChartHistoryClientTests
 
         await Assert.ThrowsAsync<HttpRequestException>(
             async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+    }
+
+    [Fact]
+    public async Task Rejects_timestamps_without_closes_instead_of_reporting_missing_data()
+    {
+        // A format change or truncated payload must not look like "that date had no fixing".
+        const string payload = """
+            {"chart":{"result":[{"meta":{"gmtoffset":0},"timestamp":[1704153600],"indicators":{}}],"error":null}}
+            """;
+
+        var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+            async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+
+        Assert.Contains("close", exception.Message);
+    }
+
+    [Fact]
+    public async Task Rejects_mismatched_timestamp_and_close_counts()
+    {
+        const string payload = """
+            {"chart":{"result":[{"meta":{"gmtoffset":0},"timestamp":[1704153600,1704240000],
+            "indicators":{"quote":[{"close":[1.1]}]}}],"error":null}}
+            """;
+
+        var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
+
+        var exception = await Assert.ThrowsAsync<HttpRequestException>(
+            async () => await client.GetDailyBarsAsync("EURUSD=X", Start, End));
+
+        Assert.Contains("2 timestamps but 1 closes", exception.Message);
+    }
+
+    [Fact]
+    public async Task Treats_an_empty_timestamp_array_as_no_sessions()
+    {
+        const string payload = """
+            {"chart":{"result":[{"meta":{"gmtoffset":0},"timestamp":[],"indicators":{"quote":[{"close":[]}]}}],"error":null}}
+            """;
+
+        var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
+
+        Assert.Empty(await client.GetDailyBarsAsync("EURUSD=X", Start, End));
     }
 
     [Fact]

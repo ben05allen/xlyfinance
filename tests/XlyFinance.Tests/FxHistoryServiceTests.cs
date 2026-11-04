@@ -114,12 +114,25 @@ public class FxHistoryServiceTests
     }
 
     [Fact]
-    public async Task Lets_cancellation_through()
+    public async Task Lets_caller_cancellation_through()
+    {
+        var provider = new StubFxHistoryProvider((_, _, _, _) => throw new OperationCanceledException());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            async () => await new FxHistoryService(provider).GetDailyRatesAsync(Query(), cancellation.Token));
+    }
+
+    [Fact]
+    public async Task Reports_cancellation_nobody_asked_for_as_unexpected()
     {
         var provider = new StubFxHistoryProvider((_, _, _, _) => throw new OperationCanceledException());
 
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await new FxHistoryService(provider).GetDailyRatesAsync(Query()));
+        var result = await new FxHistoryService(provider).GetDailyRatesAsync(Query());
+
+        Assert.False(result.Success);
+        Assert.Equal(FxErrorKind.Unexpected, result.Error!.Kind);
     }
 
     private static FxQuery Query() => Create("EURUSD", Start, End);

@@ -50,9 +50,11 @@ public sealed class YahooFxHistoryProvider : IFxHistoryProvider
 
                 return rates;
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                // Excel abandoned the calculation.
+                // Excel abandoned the calculation (or the caller gave up): not a failure to report, and
+                // no point retrying. A timeout also arrives as OperationCanceledException, but with the
+                // caller's token untouched, so it falls through to the retry logic below.
                 throw;
             }
             catch (FxDataException)
@@ -74,8 +76,14 @@ public sealed class YahooFxHistoryProvider : IFxHistoryProvider
         }
     }
 
-    private static string Describe(Exception exception) =>
-        exception.InnerException is null
+    private static string Describe(Exception exception)
+    {
+        // HttpClient reports its own timeout as a cancellation; spell out what actually happened.
+        if (exception is OperationCanceledException)
+            return "the request timed out";
+
+        return exception.InnerException is null
             ? exception.Message
             : $"{exception.Message} ({exception.InnerException.Message})";
+    }
 }

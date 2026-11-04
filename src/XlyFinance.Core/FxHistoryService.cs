@@ -40,9 +40,10 @@ public sealed class FxHistoryService
 
             return FxFetchResult.Ok(rates);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            // Excel abandoned the calculation; let the caller decide what to do.
+            // Excel abandoned the calculation; let the caller decide what to do. Cancellation nobody asked
+            // for is a provider bug, so it falls through to the unexpected-failure handler instead.
             throw;
         }
         catch (FxDataException ex)

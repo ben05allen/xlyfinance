@@ -69,12 +69,30 @@ public class YahooFxHistoryProviderTests
     }
 
     [Fact]
-    public async Task Lets_cancellation_through_without_wrapping_it()
+    public async Task Retries_a_timeout_and_reports_it_as_a_provider_failure()
+    {
+        // HttpClient surfaces its own timeout as a cancellation with the caller's token untouched.
+        var client = new FakeYahooHistoryClient((_, _, _, _) =>
+            throw new TaskCanceledException("The request was canceled due to the configured HttpClient.Timeout of 30 seconds elapsing."));
+
+        var exception = await Assert.ThrowsAsync<FxDataException>(
+            async () => await CreateProvider(client, maxAttempts: 3).GetDailyRatesAsync("EURUSD=X", Start, End));
+
+        Assert.Equal(3, client.CallCount);
+        Assert.Contains("timed out", exception.Message);
+    }
+
+    [Fact]
+    public async Task Lets_caller_cancellation_through_without_retrying_or_wrapping_it()
     {
         var client = new FakeYahooHistoryClient((_, _, _, _) => throw new OperationCanceledException());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await CreateProvider(client).GetDailyRatesAsync("EURUSD=X", Start, End));
+            async () => await CreateProvider(client).GetDailyRatesAsync("EURUSD=X", Start, End, cancellation.Token));
+
+        Assert.Equal(1, client.CallCount);
     }
 
     private static YahooFxHistoryProvider CreateProvider(IYahooHistoryClient client, int maxAttempts = 3) =>

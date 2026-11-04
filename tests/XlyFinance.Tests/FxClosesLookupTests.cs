@@ -117,12 +117,14 @@ public class FxClosesLookupTests
     }
 
     [Fact]
-    public async Task Lets_cancellation_through()
+    public async Task Lets_caller_cancellation_through()
     {
         var provider = new StubFxHistoryProvider((_, _, _, _) => throw new OperationCanceledException());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            async () => await new FxHistoryService(provider).GetClosesAsync("EURUSD", [new DateOnly(2024, 1, 1)]));
+            async () => await new FxHistoryService(provider).GetClosesAsync("EURUSD", [new DateOnly(2024, 1, 1)], cancellation.Token));
     }
 
     private static FxRate Rate(int year, int month, int day, decimal close) =>

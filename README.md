@@ -71,10 +71,14 @@ A1:A6 (dates)          B1:B6  =FXRANGE("EURUSD", A1:A6)
 - No session, cookie or crumb: only a browser-style `User-Agent` header.
 - The requested window is widened by a day at each end and trimmed locally, because Yahoo rounds bounds to
   whole sessions in the exchange's timezone.
-- Bars are mapped to dates using the response's `gmtoffset`, parsed straight into `decimal`, and null or zero
-  closes are dropped.
-- 30 second timeout, three attempts with a doubling delay for transport failures; unknown tickers fail
-  immediately with Yahoo's own message.
+- Bars are dated with the exchange's timezone (`meta.exchangeTimezoneName`) and the rules in force on that
+  date, so a summer bar is not shifted by the exchange's current UTC offset. Closes are parsed straight into
+  `decimal`; null or zero closes are dropped.
+- Responses are classified by HTTP status: 400/404/410 (or an inline error on a 200) means the request cannot
+  succeed, so it fails immediately with Yahoo's message. Timeouts, throttling and 5xx are retried three times
+  with a doubling delay, and a timeout is reported as a timeout rather than as an Excel cancellation.
+- A payload that does not have the expected shape (missing `close` array, different timestamp and close
+  counts) is an error, never `#N/A` — a broken response must not look like a day without a fixing.
 
 ## Layout
 
@@ -165,6 +169,8 @@ an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block 
   the workbook is the current workaround).
 - Close only. `YahooDailyBar`/`FxRate` are the extension points if OHLCV output is wanted later.
 - Excel's 1900 date system is assumed (`ExcelSerialDate`). The 1904 (old Mac) system is not handled.
+- Daily FX bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving
+  rules). They are not shifted to the machine's local timezone.
 - `FXRATES` is an async UDF, so it shows `#GETTING_DATA` for a moment and then fills. Excel 365 spills the
   result; in older Excel the formula has to be entered as an array (`Ctrl+Shift+Enter`).
 
