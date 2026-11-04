@@ -1,0 +1,42 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+artifacts/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Visual Studio / Rider / VS Code
+.vs/
+.vscode/
+.idea/
+*.rsuser
+*.csproj.user
+*.DotSettings.user
+
+## Excel-DNA build products (also covered by bin/ but keep them out of staging if the
+## output folder is ever redirected)
+*.xll
+*.xll.config
+*-packed.xll
+*.dna.bak
+
+## Test and coverage output
+TestResults/
+coverage*.xml
+coverage*.json
+*.coverage
+*.coveragexml
+
+## NuGet
+*.nupkg
+*.snupkg
+packages/
+.nuget/
+
+## OS noise
+.DS_Store
+Thumbs.db

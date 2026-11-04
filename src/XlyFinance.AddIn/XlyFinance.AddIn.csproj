@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>XlyFinance.AddIn</RootNamespace>
+    <AssemblyName>XlyFinance.AddIn</AssemblyName>
+
+    <!--
+      ExcelDna.AddIn output naming. Without these the generated files would be called
+      XlyFinance.AddIn-AddIn.xll / -AddIn64.xll. With them the build produces
+      XlyFinance.xll (32-bit), XlyFinance64.xll (64-bit) and XlyFinance-packed.xll.
+    -->
+    <ExcelAddInName>XlyFinance</ExcelAddInName>
+    <ExcelAddInFileName>XlyFinance</ExcelAddInFileName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Build tasks that copy the Excel-DNA loader and generate the .dna/.xll for this project. -->
+    <PackageReference Include="ExcelDna.AddIn" Version="1.9.0" PrivateAssets="all" />
+    <!-- Compile-time reference for [ExcelFunction], ExcelAsyncUtil, ExcelError, ... -->
+    <PackageReference Include="ExcelDna.Integration" Version="1.9.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\XlyFinance.Core\XlyFinance.Core.csproj" />
+  </ItemGroup>
+
+</Project>
