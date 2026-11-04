@@ -58,6 +58,44 @@ public sealed class FxHistoryService
         }
     }
 
+    /// <summary>
+    /// Loads the closing rate for each of <paramref name="dates"/>, in the order given.
+    /// </summary>
+    /// <remarks>
+    /// One provider request covers the whole span from the earliest to the latest requested date, so a
+    /// column of dates costs the same as a single date. Dates with no fixing come back as <c>null</c>.
+    /// </remarks>
+    public async Task<FxLookupResult> GetClosesAsync(
+        string? pair,
+        IReadOnlyList<DateOnly> dates,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dates);
+
+        if (dates.Count == 0)
+            return FxLookupResult.Fail(new FxError(FxErrorKind.InvalidRequest, "At least one date is required."));
+
+        if (!FxQuery.TryCreate(pair, dates.Min(), dates.Max(), out var query, out var error))
+            return FxLookupResult.Fail(new FxError(FxErrorKind.InvalidRequest, error!));
+
+        var series = await GetDailyRatesAsync(query, cancellationToken).ConfigureAwait(false);
+
+        // "No data in the span" is not a lookup failure: every requested date is simply missing, which
+        // keeps the result aligned with the input range instead of collapsing it to one #N/A cell.
+        if (!series.Success && series.Error!.Kind != FxErrorKind.NoData)
+            return FxLookupResult.Fail(series.Error!);
+
+        var closesByDate = new Dictionary<DateOnly, decimal>(series.Rates.Count);
+        foreach (var rate in series.Rates)
+            closesByDate[rate.Date] = rate.Close;
+
+        var closes = new decimal?[dates.Count];
+        for (var i = 0; i < dates.Count; i++)
+            closes[i] = closesByDate.TryGetValue(dates[i], out var close) ? close : null;
+
+        return FxLookupResult.Ok(closes);
+    }
+
     private static List<FxRate> Normalise(IReadOnlyList<FxRate>? raw, DateOnly start, DateOnly end)
     {
         // SortedDictionary keeps the dates ordered and collapses duplicates (the latest value wins).

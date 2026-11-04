@@ -2,8 +2,10 @@
 
 An Excel add-in (Excel-DNA, .NET 10) that loads daily FX rates from Yahoo Finance.
 
-You give it a pair, a start date and an end date; it pulls the daily closing rates for that window and
-spills two columns into the sheet: **date** and **close**. Both ends of the range are inclusive.
+Two ways in:
+
+- `FXRATES(pair, start, end)` — a date window; spills **date** and **close** columns, both ends inclusive.
+- `FXRANGE(pair, dates)` — a cell or range of dates; spills the close for each, in the same shape.
 
 ```
 =FXRATES("EURUSD", "2024-01-01", "2024-01-10")
@@ -18,13 +20,14 @@ spills two columns into the sheet: **date** and **close**. Both ends of the rang
 
 ## Functions
 
-All three are in the *Xly Finance* category of Excel's function wizard.
+All four are in the *Xly Finance* category of Excel's function wizard.
 
 | Function | Returns |
 | --- | --- |
 | `FXRATES(pair, start_date, end_date)` | Spilled 2-column array: date serial, close. `#N/A` when Yahoo has no observations in the window, `#VALUE!` when the request is invalid or Yahoo could not be reached. |
+| `FXRANGE(pair, dates)` | Close for each date in the given cell/range, laid out like the range (a 4x1 range gives 4x1, a 1x4 row gives 1x4, one cell gives one value). `#N/A` per date with no fixing; the whole call fails with `#VALUE!` if any cell is not a date. |
 | `FXSYMBOL(pair)` | The Yahoo ticker for a pair, e.g. `FXSYMBOL("eur/usd")` → `EURUSD=X`. Handy for sanity checks. |
-| `FXLASTERROR()` | The message behind the most recent `FXRATES` failure. Excel errors such as `#VALUE!` carry no detail, this does. |
+| `FXLASTERROR()` | The message behind the most recent `FXRATES`/`FXRANGE` failure. Excel errors such as `#VALUE!` carry no detail, this does. |
 
 Notes on the data:
 
@@ -40,6 +43,26 @@ Notes on the data:
   reported; nothing is inferred or forward-filled.
 - One pair per call, and the result is a plain array — no formatting, no table, no formulas written into the
   sheet.
+
+### Looking up a date column
+
+```
+A1:A6 (dates)          B1:B6  =FXRANGE("EURUSD", A1:A6)
+2024-01-03              1.0941756963729858
+2024-01-01              1.1055831909179688
+2024-01-06 (Sat)        #N/A
+2024-01-02              1.1038745641708374
+2024-01-03              1.0941756963729858   <- duplicates repeat, order is yours
+2024-12-25              1.0402579307556152   <- Yahoo reports a bar, so it is returned
+```
+
+- Order, duplicates and blob shape are preserved; nothing is sorted.
+- The whole span from the earliest to the latest date is fetched in **one** request, so a column of
+  dates costs the same as a single date. Widely scattered dates (years apart) still download the whole
+  span in between — use `FXRATES` for a dense window instead.
+- `#N/A` marks a date with no fixing. `IFNA`, `ISNA` and charts treat those as gaps.
+- A blank cell, a header text, a cell error or a number that is not a valid date fails the entire call
+  with `#VALUE!` and `FXLASTERROR()` naming the offending row/column. Select exactly the populated cells.
 
 ### Where the data comes from
 
@@ -58,10 +81,10 @@ Notes on the data:
 ```
 src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   FxPair, FxQuery           input normalisation and validation
-  FxHistoryService          fetch orchestration, cleaning, error mapping
+  FxHistoryService          fetch orchestration, cleaning, lookups, error mapping
   IFxHistoryProvider        abstraction over the data source
   Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
-  Dates/, Excel/            loose date parsing, Excel serial conversions
+  Dates/, Excel/            loose date parsing, range flattening, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
 tests/XlyFinance.Tests/     net10.0   xUnit tests: domain, provider retries, and transport against canned payloads
 ```
@@ -115,16 +138,18 @@ file-in-use error.
 ## How a request flows
 
 ```
-FXRATES(...)                        Excel-DNA UDF: coerce args, build FxQuery
+FXRATES(...) / FXRANGE(...)         Excel-DNA UDF: coerce args, build FxQuery / date list
   ExcelAsyncUtil.RunTask…           async: returns #GETTING_DATA, then the array
-  FxHistoryService                  clean up (range filter, sort, dedupe, drop zero closes), map errors
+  FxHistoryService                  GetDailyRatesAsync (clean, sort, dedupe) or
+                                    GetClosesAsync (project closes onto the requested dates)
   IFxHistoryProvider                YahooFxHistoryProvider: retries transient failures
   IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
 ```
 
 Bad arguments are rejected before any HTTP call (the UDF returns `#VALUE!` and says why). Everything after that
-comes back as an `FxError` — `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can pick an Excel
-error and record the detail for `FXLASTERROR()` and the trace log.
+comes back as an `FxError` — `InvalidRequest`, `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can
+pick an Excel error and record the detail for `FXLASTERROR()` and the trace log. A missing *individual* date is not
+an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block intact.
 
 ## Known limitations / next steps
 

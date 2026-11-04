@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using ExcelDna.Integration;
 using XlyFinance.Core;
@@ -57,6 +59,43 @@ public static class FxFunctions
     }
 
     /// <summary>
+    /// Looks up the closing rate for one or many dates, keeping the shape of the date range.
+    /// </summary>
+    [ExcelFunction(
+        Name = "FXRANGE",
+        Category = Category,
+        Description = "Returns the daily FX closing rate for each date in a range, laid out like the range. #N/A where a date has no fixing.",
+        IsThreadSafe = true)]
+    public static object FxRange(
+        [ExcelArgument(Name = "pair", Description = "Currency pair, for example \"EURUSD\" or \"EUR/USD\".")] object pair,
+        [ExcelArgument(Name = "dates", Description = "One date, or a range of dates to look up.")] object dates)
+    {
+        if (!ExcelValues.TryReadDateGrid(dates, out var grid, out var datesError))
+            return Fail(datesError, ExcelError.ExcelErrorValue);
+
+        var pairText = ExcelValues.AsText(pair);
+
+        // Reject an unusable pair before the async machinery, so bad input never costs a round trip.
+        if (!FxPair.TryNormalize(pairText, out var symbol, out var pairError))
+            return Fail(pairError, ExcelError.ExcelErrorValue);
+
+        // The key doubles as the async topic. It includes the input shape because a 4x1 and a 1x4 range
+        // holding the same dates must not share one cached answer, and a hash of the dates because a
+        // column of them is too long to put in a topic verbatim.
+        var key = new object[]
+        {
+            symbol,
+            $"{grid.Rows}x{grid.Columns}",
+            TopicHash(grid.Dates),
+        };
+
+        return ExcelAsyncUtil.RunTaskWithCancellation<object>(
+            "FXRANGE",
+            key,
+            cancellationToken => FetchLookupAsync(pairText, grid, cancellationToken));
+    }
+
+    /// <summary>
     /// Normalises a pair to the ticker Yahoo Finance uses. Handy for sanity checking a sheet.
     /// </summary>
     [ExcelFunction(
@@ -75,12 +114,12 @@ public static class FxFunctions
 
     /// <summary>
     /// Explains the most recent failure. Excel only shows <c>#VALUE!</c> or <c>#N/A</c> from
-    /// <c>FXRATES</c>, which is not much to go on.
+    /// <c>FXRATES</c>/<c>FXRANGE</c>, which is not much to go on.
     /// </summary>
     [ExcelFunction(
         Name = "FXLASTERROR",
         Category = Category,
-        Description = "Returns the message of the most recent FXRATES failure.",
+        Description = "Returns the message of the most recent FXRATES or FXRANGE failure.",
         IsThreadSafe = true)]
     public static object FxLastError() =>
         Volatile.Read(ref _lastError) ?? "No FX failure has been recorded since Excel started.";
@@ -104,6 +143,38 @@ public static class FxFunctions
         }
 
         return ExcelValues.ToRateArray(result.Rates);
+    }
+
+    private static async Task<object> FetchLookupAsync(
+        string? pair,
+        DateGridInput grid,
+        CancellationToken cancellationToken)
+    {
+        var result = await Service.Value
+            .GetClosesAsync(pair, grid.Dates, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.Success)
+        {
+            var error = result.Error!;
+            return Fail(error.Message, ToExcelError(error.Kind), error.Exception);
+        }
+
+        return ExcelValues.ToLookupGrid(result.Closes, grid);
+    }
+
+    /// <summary>
+    /// Stable fingerprint of the requested dates, used as part of the async topic.
+    /// </summary>
+    private static string TopicHash(IReadOnlyList<DateOnly> dates)
+    {
+        var builder = new StringBuilder(dates.Count * 8);
+
+        foreach (var date in dates)
+            builder.Append(date.DayNumber).Append(',');
+
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(builder.ToString()));
+        return Convert.ToHexString(hash);
     }
 
     private static bool TryBuildQuery(

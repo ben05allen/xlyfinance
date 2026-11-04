@@ -3,6 +3,9 @@ namespace XlyFinance.Core;
 /// <summary>Classifies why a FX request could not be served.</summary>
 public enum FxErrorKind
 {
+    /// <summary>The request itself is unusable: no dates, or a pair that is not a pair.</summary>
+    InvalidRequest,
+
     /// <summary>The provider answered successfully, but no usable observation fell inside the range.</summary>
     NoData,
 
