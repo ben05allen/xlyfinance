@@ -74,9 +74,9 @@ implementing `IFxHistoryProvider`; adding OHLC output means extending `FxRate` a
 
 Requirements:
 
-- Visual Studio 2022 **17.14 or newer** (the first release that can build .NET 10 projects), with the
-  *.NET desktop development* workload
-- .NET 10 SDK
+- Visual Studio 2022 **17.14 or newer**, or **Visual Studio 2026** (Community is fine) — anything that can
+  build .NET 10 projects. Include the *.NET desktop development* workload.
+- .NET 10 SDK (bundled with VS 2026)
 - Excel (64-bit recommended; the build also emits a 32-bit `.xll`)
 
 ```
@@ -98,9 +98,19 @@ dotnet test
 To try it: open Excel → *File → Options → Add-ins → Excel Add-ins → Go… → Browse…* → pick
 `publish\XlyFinance64-packed.xll`. Then type a formula.
 
-To debug: press **F5** in Visual Studio with `XlyFinance.AddIn` as the startup project — Excel-DNA wires up
-`Properties\launchSettings.json` on build, so Visual Studio launches Excel with the add-in loaded and
-breakpoints hit.
+### F5 debugging
+
+Set `XlyFinance.AddIn` as the startup project and press **F5**. Excel-DNA writes
+`Properties\launchSettings.json` on build with an `Excel` profile that runs `EXCEL.EXE /x "XlyFinance64.xll"`,
+so the unpacked add-in is loaded for the debug session and breakpoints in `FxFunctions` and `XlyFinance.Core`
+are hit.
+
+If Excel starts but `=FXRATES(...)` says `#NAME?`, Excel was launched in a different working directory and never
+found the `.xll` (the profile passes a bare file name, and the build task rewrites it on every build). Load the
+add-in by hand as above, then use *Debug → Attach to Process… → EXCEL.EXE* — breakpoints work the same.
+
+Either way, **close Excel before rebuilding**: the loaded `.xll` is locked and the build fails with a
+file-in-use error.
 
 ## How a request flows
 
@@ -135,8 +145,9 @@ error and record the detail for `FXLASTERROR()` and the trace log.
 
 ## Troubleshooting
 
-- **Visual Studio refuses `net10.0-windows`** — that TFM needs VS 2022 17.14+ and the .NET 10 SDK. Either update,
-  or retarget all three projects to `net8.0-windows` / `net8.0` (Excel-DNA 1.9 supports it; nothing else changes).
+- **Visual Studio refuses `net10.0-windows`** — that TFM needs VS 2022 17.14+ (or VS 2026) and the .NET 10 SDK.
+  Either update, or retarget all three projects to `net8.0-windows` / `net8.0` (Excel-DNA 1.9 supports it;
+  nothing else changes).
 - **Excel says the add-in cannot be loaded** — check bitness (32-bit Excel needs `XlyFinance-packed.xll`, 64-bit
   needs `XlyFinance64-packed.xll`) and that the .NET 10 runtime is installed.
 - **`#VALUE!` with no explanation** — run `=FXLASTERROR()` in a cell; it holds the message from the last failure.
