@@ -3,9 +3,6 @@ namespace XlyFinance.Core;
 /// <summary>Classifies why a FX request could not be served.</summary>
 public enum FxErrorKind
 {
-    /// <summary>The user supplied something that cannot be turned into a request.</summary>
-    InvalidRequest,
-
     /// <summary>The provider answered successfully, but no usable observation fell inside the range.</summary>
     NoData,
 

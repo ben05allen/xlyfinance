@@ -6,15 +6,19 @@ You give it a pair, a start date and an end date; it pulls the daily closing rat
 spills two columns into the sheet: **date** and **close**. Both ends of the range are inclusive.
 
 ```
-=FXRATES("EURUSD", "2024-01-01", "2024-01-31")
+=FXRATES("EURUSD", "2024-01-01", "2024-01-10")
 
-| 45292 | 1.10418 |   <- date serial, format column A as a date
-| 45293 | 1.10189 |
-| 45294 | 1.10302 |
-| ...   | ...     |
+| 45292 | 1.1055831909179688 |   <- date serial, format column A as a date
+| 45293 | 1.1038745641708374 |
+| 45294 | 1.0941756963729858 |
+| ...   | ...                |
 ```
 
+(Those are real values: eight rows for that window, because 6 and 7 January 2024 were a weekend.)
+
 ## Functions
+
+All three are in the *Xly Finance* category of Excel's function wizard.
 
 | Function | Returns |
 | --- | --- |
@@ -24,14 +28,30 @@ spills two columns into the sheet: **date** and **close**. Both ends of the rang
 
 Notes on the data:
 
-- Bars are **daily closes** as reported by Yahoo Finance. Non-trading days (weekends, market holidays) are
-  simply absent — the array is not padded with blanks, so row counts can be shorter than the date range.
+- Bars are **daily closes** as reported by Yahoo Finance. Weekends and most market holidays have no bar at
+  all — the array is not padded or forward-filled, so row counts can be shorter than the date range.
 - The pair is normalised: `EURUSD`, `eur/usd`, `EUR_USD` and `EURUSD=X` all resolve to `EURUSD=X`.
 - Recalculation with identical arguments reuses the value already fetched (Excel-DNA async/RTD caching), so
   pressing F9 does not hammer Yahoo. Change an argument, or use the same arguments in a fresh workbook, to
   force a new request.
 - Dates are returned as Excel serial numbers, so charts and date maths work. Format the column as a date
   (`Ctrl+1`) to see `2024-01-01` instead of `45292`.
+- A market holiday that Yahoo still reports a bar for (usually a repeat of the previous close) is kept as
+  reported; nothing is inferred or forward-filled.
+- One pair per call, and the result is a plain array — no formatting, no table, no formulas written into the
+  sheet.
+
+### Where the data comes from
+
+`GET https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&events=history&period1=…&period2=…`
+
+- No session, cookie or crumb: only a browser-style `User-Agent` header.
+- The requested window is widened by a day at each end and trimmed locally, because Yahoo rounds bounds to
+  whole sessions in the exchange's timezone.
+- Bars are mapped to dates using the response's `gmtoffset`, parsed straight into `decimal`, and null or zero
+  closes are dropped.
+- 30 second timeout, three attempts with a doubling delay for transport failures; unknown tickers fail
+  immediately with Yahoo's own message.
 
 ## Layout
 
@@ -43,7 +63,7 @@ src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
   Dates/, Excel/            loose date parsing, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
-tests/XlyFinance.Tests/     net10.0   xUnit tests for everything above the transport
+tests/XlyFinance.Tests/     net10.0   xUnit tests: domain, provider retries, and transport against canned payloads
 ```
 
 The rule of thumb: `XlyFinance.AddIn` knows about Excel, `XlyFinance.Core` knows about data, and only
@@ -87,13 +107,14 @@ breakpoints hit.
 ```
 FXRATES(...)                        Excel-DNA UDF: coerce args, build FxQuery
   ExcelAsyncUtil.RunTask…           async: returns #GETTING_DATA, then the array
-  FxHistoryService                  validate + normalise (range filter, sort, dedupe, drop zero closes)
+  FxHistoryService                  clean up (range filter, sort, dedupe, drop zero closes), map errors
   IFxHistoryProvider                YahooFxHistoryProvider: retries transient failures
   IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
 ```
 
-Failures are converted to `FxError` (`InvalidRequest`, `NoData`, `ProviderUnavailable`, `Unexpected`) so the
-UDF can pick an Excel error and record the detail for `FXLASTERROR()` and the Excel-DNA diagnostics log.
+Bad arguments are rejected before any HTTP call (the UDF returns `#VALUE!` and says why). Everything after that
+comes back as an `FxError` — `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can pick an Excel
+error and record the detail for `FXLASTERROR()` and the trace log.
 
 ## Known limitations / next steps
 
@@ -101,7 +122,7 @@ UDF can pick an Excel error and record the detail for `FXLASTERROR()` and the Ex
   under no obligation to keep working. Everything is behind `IFxHistoryProvider` / `IYahooHistoryClient` so a
   fallback (ECB reference rates, another vendor) can be dropped in without touching the UDFs.
 - `YahooFinanceApi` 2.3.3 is *not* used: its history method calls `v7/finance/download`, which wants a session
-  cookie and crumb and now answers HTTP 401 for every symbol (verified 2024-2025 data, all pairs).
+  cookie and crumb and now answers HTTP 401 for every symbol, valid or not (checked across pairs and ranges).
 - No disk cache: every distinct argument set hits the network. An on-disk cache keyed by symbol + date would be
   the obvious next win for large sheets.
 - One pair per call. A multi-pair matrix function would be a separate UDF over the same service.
@@ -129,3 +150,8 @@ UDF can pick an Excel error and record the detail for `FXLASTERROR()` and the Ex
 
 `XlyFinance.Core` and the tests are plain `net10.0`, so they build and run on any OS with the .NET 10 SDK.
 Only `XlyFinance.AddIn` is Windows specific (`net10.0-windows`), because Excel-DNA builds the `.xll` there.
+Building the add-in off Windows needs `dotnet build -p:EnableWindowsTargeting=true`.
+
+`dotnet test` covers the domain, the retry policy and the JSON mapping; it does not call Yahoo. The live path
+was checked by hand against `EURUSD=X` (see the example above), including a weekend-only window and a bogus
+ticker.
