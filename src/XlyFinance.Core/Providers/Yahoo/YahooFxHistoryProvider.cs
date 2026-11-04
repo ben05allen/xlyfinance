@@ -1,8 +1,9 @@
 namespace XlyFinance.Core.Providers.Yahoo;
 
 /// <summary>
-/// Default <see cref="IFxHistoryProvider"/>: fetches from Yahoo Finance, retries transient failures and
-/// reports everything else as an <see cref="FxDataException"/>.
+/// Default <see cref="IFxHistoryProvider"/>: fetches from Yahoo Finance through an
+/// <see cref="IYahooHistoryClient"/>, retries transient failures and reports failures as
+/// <see cref="FxDataException"/>.
 /// </summary>
 public sealed class YahooFxHistoryProvider : IFxHistoryProvider
 {
@@ -51,9 +52,15 @@ public sealed class YahooFxHistoryProvider : IFxHistoryProvider
             }
             catch (OperationCanceledException)
             {
+                // Excel abandoned the calculation.
                 throw;
             }
-            catch (Exception ex) when (attempt < _maxAttempts && ShouldRetry(ex))
+            catch (FxDataException)
+            {
+                // The client classified this as permanent (unknown ticker, no data); retrying will not help.
+                throw;
+            }
+            catch (Exception) when (attempt < _maxAttempts)
             {
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 delay += delay;
@@ -66,14 +73,6 @@ public sealed class YahooFxHistoryProvider : IFxHistoryProvider
             }
         }
     }
-
-    /// <summary>
-    /// Yahoo reports unknown tickers with a plain <see cref="Exception"/> rather than a typed HTTP error,
-    /// so the only cheap signal is the message. Retrying those would just waste the user's patience;
-    /// everything else (timeouts, throttling, 5xx) is worth another try.
-    /// </summary>
-    private static bool ShouldRetry(Exception exception) =>
-        !exception.Message.Contains("Invalid ticker", StringComparison.OrdinalIgnoreCase);
 
     private static string Describe(Exception exception) =>
         exception.InnerException is null

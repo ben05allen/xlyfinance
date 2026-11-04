@@ -44,17 +44,16 @@ public class YahooFxHistoryProviderTests
     }
 
     [Fact]
-    public async Task Does_not_retry_an_unknown_ticker()
+    public async Task Does_not_retry_a_permanent_failure()
     {
         var client = new FakeYahooHistoryClient((symbol, _, _, _) =>
-            throw new Exception($"Invalid ticker or endpoint for symbol '{symbol}'."));
+            throw new FxDataException($"Yahoo Finance has no data for '{symbol}'."));
 
         var exception = await Assert.ThrowsAsync<FxDataException>(
             async () => await CreateProvider(client).GetDailyRatesAsync("EURUSD=X", Start, End));
 
         Assert.Equal(1, client.CallCount);
-        Assert.Contains("Invalid ticker", exception.Message);
-        Assert.NotNull(exception.InnerException);
+        Assert.Contains("no data", exception.Message);
     }
 
     [Fact]

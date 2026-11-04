@@ -6,8 +6,4 @@
     <AssemblyName>XlyFinance.Core</AssemblyName>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="YahooFinanceApi" Version="2.3.3" />
-  </ItemGroup>
-
 </Project>

@@ -87,7 +87,7 @@ public static class FxFunctions
 
     private static FxHistoryService CreateService()
     {
-        var provider = new YahooFxHistoryProvider(new YahooFinanceHistoryClient());
+        var provider = new YahooFxHistoryProvider(new YahooChartHistoryClient());
         return new FxHistoryService(provider);
     }
 

@@ -40,14 +40,14 @@ src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   FxPair, FxQuery           input normalisation and validation
   FxHistoryService          fetch orchestration, cleaning, error mapping
   IFxHistoryProvider        abstraction over the data source
-  Providers/Yahoo/          IYahooHistoryClient + YahooFinanceApi adapter + retry provider
+  Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
   Dates/, Excel/            loose date parsing, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
 tests/XlyFinance.Tests/     net10.0   xUnit tests for everything above the transport
 ```
 
 The rule of thumb: `XlyFinance.AddIn` knows about Excel, `XlyFinance.Core` knows about data, and only
-`YahooFinanceHistoryClient` knows about the `YahooFinanceApi` package. Swapping data source means
+`YahooChartHistoryClient` knows about Yahoo's JSON. Swapping data source means
 implementing `IFxHistoryProvider`; adding OHLC output means extending `FxRate` and `ExcelValues.ToRateArray`.
 
 ## Building (Windows)
@@ -68,16 +68,15 @@ dotnet test
 
 ## Running the add-in
 
-`XlyFinance.AddIn` builds an Excel-DNA add-in. After a build, the output folder
-(`src\XlyFinance.AddIn\bin\Debug\net10.0-windows\`) contains:
+`XlyFinance.AddIn` builds an Excel-DNA add-in into `src\XlyFinance.AddIn\bin\Debug\net10.0-windows\`:
 
 - `XlyFinance64.xll` — unpacked 64-bit add-in, used for debugging (loads the DLLs next to it)
-- `XlyFinance64-packed.xll` — single-file 64-bit add-in, the thing you would hand to a colleague
-- `XlyFinance.xll` / `XlyFinance-packed.xll` — the same for 32-bit Excel
-- `XlyFinance64.dna`, `XlyFinance.AddIn.dll` — pieces the unpacked `.xll` needs
+- `XlyFinance64.dna`, `XlyFinance.AddIn.dll`, `XlyFinance.Core.dll` — pieces the unpacked `.xll` needs
+- `publish\XlyFinance64-packed.xll` — single-file 64-bit add-in, the thing you would hand to a colleague
+- `XlyFinance.xll` / `publish\XlyFinance-packed.xll` — the same for 32-bit Excel
 
 To try it: open Excel → *File → Options → Add-ins → Excel Add-ins → Go… → Browse…* → pick
-`XlyFinance64-packed.xll`. Then type a formula.
+`publish\XlyFinance64-packed.xll`. Then type a formula.
 
 To debug: press **F5** in Visual Studio with `XlyFinance.AddIn` as the startup project — Excel-DNA wires up
 `Properties\launchSettings.json` on build, so Visual Studio launches Excel with the add-in loaded and
@@ -90,7 +89,7 @@ FXRATES(...)                        Excel-DNA UDF: coerce args, build FxQuery
   ExcelAsyncUtil.RunTask…           async: returns #GETTING_DATA, then the array
   FxHistoryService                  validate + normalise (range filter, sort, dedupe, drop zero closes)
   IFxHistoryProvider                YahooFxHistoryProvider: retries transient failures
-  IYahooHistoryClient               YahooFinanceHistoryClient: YahooFinanceApi call
+  IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
 ```
 
 Failures are converted to `FxError` (`InvalidRequest`, `NoData`, `ProviderUnavailable`, `Unexpected`) so the
@@ -98,9 +97,11 @@ UDF can pick an Excel error and record the detail for `FXLASTERROR()` and the Ex
 
 ## Known limitations / next steps
 
-- Yahoo's historical download endpoint needs a session cookie and "crumb"; `YahooFinanceApi` handles that, but
-  it is an unofficial endpoint and can throttle or change. The abstraction above it exists so a fallback (for
-  example the `v8/finance/chart` API, or the ECB reference rates) can be added without touching the UDFs.
+- Yahoo is an unofficial source: the `v8/finance/chart` endpoint needs no session but can throttle, and it is
+  under no obligation to keep working. Everything is behind `IFxHistoryProvider` / `IYahooHistoryClient` so a
+  fallback (ECB reference rates, another vendor) can be dropped in without touching the UDFs.
+- `YahooFinanceApi` 2.3.3 is *not* used: its history method calls `v7/finance/download`, which wants a session
+  cookie and crumb and now answers HTTP 401 for every symbol (verified 2024-2025 data, all pairs).
 - No disk cache: every distinct argument set hits the network. An on-disk cache keyed by symbol + date would be
   the obvious next win for large sheets.
 - One pair per call. A multi-pair matrix function would be a separate UDF over the same service.

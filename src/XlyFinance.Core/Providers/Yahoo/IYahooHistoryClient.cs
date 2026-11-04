@@ -6,15 +6,18 @@ namespace XlyFinance.Core.Providers.Yahoo;
 public readonly record struct YahooDailyBar(DateOnly Date, decimal Close);
 
 /// <summary>
-/// Thin seam over the <c>YahooFinanceApi</c> package, so the mapping, retry and validation logic can be
-/// tested without touching the network.
+/// Thin seam over the Yahoo Finance HTTP API, so mapping, retry and validation can be tested without
+/// touching the network.
 /// </summary>
 public interface IYahooHistoryClient
 {
     /// <summary>
     /// Requests daily bars for an inclusive date range.
     /// </summary>
-    /// <exception cref="Exception">Whatever the Yahoo client throws. The provider decides how to react.</exception>
+    /// <exception cref="FxDataException">
+    /// The request cannot succeed as stated (unknown ticker, no data). Implementations should use this for
+    /// permanent failures; anything else (timeouts, throttling, 5xx) is thrown as-is and retried upstream.
+    /// </exception>
     Task<IReadOnlyList<YahooDailyBar>> GetDailyBarsAsync(
         string symbol,
         DateOnly startInclusive,
