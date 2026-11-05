@@ -64,122 +64,40 @@ A1:A6 (dates)          B1:B6  =FXRANGE("EURUSD", A1:A6)
 - A blank cell, a header text, a cell error or a number that is not a valid date fails the entire call
   with `#VALUE!` and `FXLASTERROR()` naming the offending row/column. Select exactly the populated cells.
 
-### Where the data comes from
-
-`GET https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&events=history&period1=…&period2=…`
-
-- No session, cookie or crumb: only a browser-style `User-Agent` header.
-- The requested window is widened by a day at each end and trimmed locally, because Yahoo rounds bounds to
-  whole sessions in the exchange's timezone.
-- Bars are dated with the exchange's timezone (`meta.exchangeTimezoneName`) and the rules in force on that
-  date, so a summer bar is not shifted by the exchange's current UTC offset. Closes are parsed straight into
-  `decimal`; null or zero closes are dropped.
-- Responses are classified by HTTP status: 400/404/410 (or an inline error on a 200) means the request cannot
-  succeed, so it fails immediately with Yahoo's message. Timeouts, throttling and 5xx are retried three times
-  with a doubling delay (15 second timeout per attempt, so at worst ~45 seconds of `#GETTING_DATA`), and a
-  timeout is reported as a timeout rather than as an Excel cancellation.
-- A payload that does not have the expected shape (missing `close` array, different timestamp and close
-  counts) is an error, never `#N/A` — a broken response must not look like a day without a fixing.
-
-## Layout
-
-```
-src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
-  FxPair, FxQuery           input normalisation and validation
-  FxHistoryService          fetch orchestration, cleaning, lookups, error mapping
-  IFxHistoryProvider        abstraction over the data source
-  Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
-  Dates/, Excel/            loose date parsing, range flattening, Excel serial conversions
-src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
-tests/XlyFinance.Tests/     net10.0   xUnit tests: domain, provider retries, and transport against canned payloads
-```
-
-The rule of thumb: `XlyFinance.AddIn` knows about Excel, `XlyFinance.Core` knows about data, and only
-`YahooChartHistoryClient` knows about Yahoo's JSON. Swapping data source means
-implementing `IFxHistoryProvider`; adding OHLC output means extending `FxRate` and `ExcelValues.ToRateArray`.
-
-## Building (Windows)
+## Getting started
 
 Requirements:
 
-- Visual Studio 2022 **17.14 or newer**, or **Visual Studio 2026** (Community is fine) — anything that can
-  build .NET 10 projects. Include the *.NET desktop development* workload.
-- .NET 10 SDK (bundled with VS 2026)
 - Excel (64-bit recommended; the build also emits a 32-bit `.xll`)
+- .NET 10 SDK — Visual Studio 2022 **17.14 or newer**, or **Visual Studio 2026** (Community is fine), with
+  the *.NET desktop development* workload
 
 ```
 git clone <this repo>
-start XlyFinance.sln     # or open the folder in Visual Studio
+cd xlyfinance
 dotnet build
-dotnet test
 ```
 
-## Running the add-in
+The build writes a single-file add-in to
+`src\XlyFinance.AddIn\bin\Debug\net10.0-windows\publish\XlyFinance64-packed.xll`. Load it: open Excel →
+*File → Options → Add-ins → Excel Add-ins → Go… → Browse…* → pick that file. Then type a formula.
 
-`XlyFinance.AddIn` builds an Excel-DNA add-in into `src\XlyFinance.AddIn\bin\Debug\net10.0-windows\`:
+The same file is what you hand to a colleague (32-bit Excel needs `XlyFinance-packed.xll` instead).
 
-- `XlyFinance64.xll` — unpacked 64-bit add-in, used for debugging (loads the DLLs next to it)
-- `XlyFinance64.dna`, `XlyFinance.AddIn.dll`, `XlyFinance.Core.dll` — pieces the unpacked `.xll` needs
-- `publish\XlyFinance64-packed.xll` — single-file 64-bit add-in, the thing you would hand to a colleague
-- `XlyFinance.xll` / `publish\XlyFinance-packed.xll` — the same for 32-bit Excel
+## Limitations
 
-To try it: open Excel → *File → Options → Add-ins → Excel Add-ins → Go… → Browse…* → pick
-`publish\XlyFinance64-packed.xll`. Then type a formula.
-
-### F5 debugging
-
-Set `XlyFinance.AddIn` as the startup project and press **F5**. Excel-DNA writes
-`Properties\launchSettings.json` on build with an `Excel` profile that runs `EXCEL.EXE /x "XlyFinance64.xll"`,
-so the unpacked add-in is loaded for the debug session and breakpoints in `FxFunctions` and `XlyFinance.Core`
-are hit.
-
-If Excel starts but `=FXRATES(...)` says `#NAME?`, Excel was launched in a different working directory and never
-found the `.xll` (the profile passes a bare file name, and the build task rewrites it on every build). Load the
-add-in by hand as above, then use *Debug → Attach to Process… → EXCEL.EXE* — breakpoints work the same.
-
-Either way, **close Excel before rebuilding**: the loaded `.xll` is locked and the build fails with a
-file-in-use error.
-
-## How a request flows
-
-```
-FXRATES(...) / FXRANGE(...)         Excel-DNA UDF: coerce args, build FxQuery / date list
-  ExcelAsyncUtil.RunTask…           async: returns #GETTING_DATA, then the array
-  FxHistoryService                  GetDailyRatesAsync (clean, sort, dedupe) or
-                                    GetClosesAsync (project closes onto the requested dates)
-  IFxHistoryProvider                YahooFxHistoryProvider: retries transient failures
-  IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
-```
-
-Bad arguments are rejected before any HTTP call (the UDF returns `#VALUE!` and says why). Everything after that
-comes back as an `FxError` — `InvalidRequest`, `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can
-pick an Excel error and record the detail for `FXLASTERROR()` and the trace log. A missing *individual* date is not
-an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block intact.
-
-## Known limitations / next steps
-
-- Yahoo is an unofficial source: the `v8/finance/chart` endpoint needs no session but can throttle, and it is
-  under no obligation to keep working. Everything is behind `IFxHistoryProvider` / `IYahooHistoryClient` so a
-  fallback (ECB reference rates, another vendor) can be dropped in without touching the UDFs.
-- `YahooFinanceApi` 2.3.3 is *not* used: its history method calls `v7/finance/download`, which wants a session
-  cookie and crumb and now answers HTTP 401 for every symbol, valid or not (checked across pairs and ranges).
-- No disk cache: every distinct argument set hits the network. An on-disk cache keyed by symbol + date would be
-  the obvious next win for large sheets.
-- One pair per call. A multi-pair matrix function would be a separate UDF over the same service.
-- The async value is cached by argument; there is no explicit "refresh now" function yet (forcing a rebuild of
-  the workbook is the current workaround).
-- Close only. `YahooDailyBar`/`FxRate` are the extension points if OHLCV output is wanted later.
-- Excel's 1900 date system is assumed (`ExcelSerialDate`). The 1904 (old Mac) system is not handled.
-- Daily FX bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving
-  rules). They are not shifted to the machine's local timezone.
-- `FXRATES` is an async UDF, so it shows `#GETTING_DATA` for a moment and then fills. Excel 365 spills the
-  result; in older Excel the formula has to be entered as an array (`Ctrl+Shift+Enter`).
+- Yahoo's `v8/finance/chart` endpoint is **unofficial**: it needs no session but can throttle, and it is under
+  no obligation to keep working.
+- Daily **closes only**, one pair per call. No OHLCV, no multi-pair matrix.
+- Excel's 1900 date system is assumed; the 1904 (old Mac) system is not handled.
+- Bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving rules),
+  not shifted to your machine's local timezone.
+- `FXRATES` is async: it shows `#GETTING_DATA` for a moment and then fills. Excel 365 spills the result; in
+  older Excel the formula has to be entered as an array (`Ctrl+Shift+Enter`).
+- There is no explicit "refresh now" function — values are cached per argument set (see the notes above).
 
 ## Troubleshooting
 
-- **Visual Studio refuses `net10.0-windows`** — that TFM needs VS 2022 17.14+ (or VS 2026) and the .NET 10 SDK.
-  Either update, or retarget all three projects to `net8.0-windows` / `net8.0` (Excel-DNA 1.9 supports it;
-  nothing else changes).
 - **Excel says the add-in cannot be loaded** — check bitness (32-bit Excel needs `XlyFinance-packed.xll`, 64-bit
   needs `XlyFinance64-packed.xll`) and that the .NET 10 runtime is installed.
 - **`#VALUE!` with no explanation** — run `=FXLASTERROR()` in a cell; it holds the message from the last failure.
@@ -189,18 +107,13 @@ an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block 
   cheap). Changing any argument (for example nudging the end date) creates a new topic and a new request;
   closing and reopening the workbook also clears it.
 
-## Development notes
+## Contributing
 
-`XlyFinance.Core` and the tests are plain `net10.0`, so they build and run on any OS with the .NET 10 SDK.
-Only `XlyFinance.AddIn` is Windows specific (`net10.0-windows`), because Excel-DNA builds the `.xll` there.
-Building the add-in off Windows needs `dotnet build -p:EnableWindowsTargeting=true`.
+Building the add-in, F5 debugging, the project layout, how a request flows and the data-source details all
+live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
-The two async UDFs (`FXRATES`, `FXRANGE`) are deliberately **not** marked `IsThreadSafe`. Excel-DNA's async
-support is RTD based, and letting Excel call it from a worker thread races with the RTD COM registration, which
-shows up as `RTD server ... could not be registered` in the diagnostics log (Excel-DNA issue #667). The slow work
-already runs on the thread pool, so there is nothing to gain from the flag. `FXSYMBOL`/`FXLASTERROR` are pure, so
-they do keep it.
+## Licence
 
-`dotnet test` covers the domain, the retry policy and the JSON mapping; it does not call Yahoo. The live path
-was checked by hand against `EURUSD=X` (see the example above), including a weekend-only window and a bogus
-ticker.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Benjamin Allen.
+
+Yahoo Finance data is not covered by this licence; it remains subject to Yahoo's own terms of use.

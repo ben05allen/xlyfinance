@@ -6,6 +6,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Deterministic>true</Deterministic>
     <IsPackable>false</IsPackable>
+
+    <!-- Matches the MIT LICENSE at the repo root; only surfaces if a project is ever packed. -->
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
 </Project>

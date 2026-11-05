@@ -1,0 +1,78 @@
+# EditorConfig: https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{md,yml,yaml,json}]
+indent_size = 2
+
+[*.sln]
+indent_style = tab
+
+# --- C# -------------------------------------------------------------------
+[*.cs]
+
+# Organising: System/other usings in separate blocks, alphabetised.
+dotnet_sort_system_directives_first = true
+dotnet_separate_import_directive_groups = false
+
+# Language rules
+csharp_new_line_before_open_brace = all
+csharp_new_line_before_else = true
+csharp_new_line_before_catch = true
+csharp_new_line_before_finally = true
+csharp_new_line_before_members_in_object_initializers = true
+csharp_new_line_before_members_in_anonymous_types = true
+csharp_new_line_between_query_expression_clauses = true
+csharp_indent_case_contents = true
+csharp_indent_switch_labels = true
+csharp_space_after_cast = false
+csharp_space_after_keywords_in_control_flow_statements = true
+csharp_space_between_method_call_parameter_list_parentheses = false
+csharp_space_between_method_declaration_parameter_list_parentheses = false
+csharp_space_between_parentheses = false
+csharp_preserve_single_line_statements = true
+csharp_preserve_single_line_blocks = true
+
+# Member ordering: constants, fields, constructors, properties, methods.
+dotnet_sort_members_lexicographically = true
+dotnet_sort_members_appearance = true
+
+# Preferred modifiers (suggestions only, the codebase already follows these).
+csharp_preferred_modifier_order = public,private,protected,internal,static,extern,new,virtual,abstract,sealed,override,readonly,unsafe,volatile,async:suggestion
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_style_var_for_built_in_types = true:suggestion
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_style_var_elsewhere = true:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = when_on_single_line:suggestion
+csharp_style_expression_bodied_accessors = when_on_single_line:suggestion
+csharp_style_braces = when_multiline:suggestion
+
+# Nullability / modern C#
+csharp_style_null_checking = true:suggestion
+csharp_style_prefer_is_null_check_over_reference_equality_method = true:suggestion
+csharp_style_prefer_pattern_matching = true:suggestion
+csharp_style_prefer_switch_expression = false:suggestion
+
+# Formatting noise we do not want reported as warnings.
+dotnet_diagnostic.IDE0005.severity = silent
+dotnet_diagnostic.IDE0011.severity = suggestion
+dotnet_diagnostic.IDE0161.severity = suggestion
+
+# This repo does not enforce analyzers beyond the SDK defaults.
+dotnet_analyzer_diagnostic.severity = suggestion
+
+# --- XML / projects -------------------------------------------------------
+[*.{csproj,props,targets,ruleset,config,nuspec,resx}]
+indent_size = 2
+
+# --- Scripts --------------------------------------------------------------
+[*.{sh,ps1,bash}]
+indent_size = 2

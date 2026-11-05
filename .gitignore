@@ -24,6 +24,10 @@ artifacts/
 *-packed.xll
 *.dna.bak
 
+# Excel-DNA writes Properties/launchSettings.json on every build (the Excel F5 profile),
+# so tracking it would only ever produce spurious diffs
+**/Properties/launchSettings.json
+
 ## Test and coverage output
 TestResults/
 coverage*.xml
