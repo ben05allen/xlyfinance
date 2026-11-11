@@ -11,7 +11,8 @@ enough.
 - Yahoo FX data is read from the public `v8/finance/chart` endpoint over `HttpClient` +
   `System.Text.Json`. `YahooFinanceApi` is deliberately **not** used (see
   [Known limitations and next steps](#known-limitations-and-next-steps)).
-- Async/await throughout; the UDFs return `Task<object>` and go through Excel-DNA's `ExcelAsyncUtil`.
+- The fetching UDFs return `object` through `ExcelAsyncUtil.RunTaskWithCancellation<object>`; their
+  asynchronous helpers return `Task<object>`. Keep network work off Excel's calculation thread.
 - Every UDF carries `[ExcelFunction]`.
 - Clean separation between the external API (Yahoo HTTP, behind `IYahooHistoryClient`) and the Excel-DNA
   wrapper methods.
@@ -29,6 +30,7 @@ src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
   Dates/, Excel/            loose date parsing, range flattening, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
+  LastErrorObservable      latest diagnostic and live notifications to Excel subscribers
 tests/XlyFinance.Tests/     net10.0   xUnit tests: domain, provider retries, and transport against canned payloads
 tests/XlyFinance.AddIn.Tests/ net10.0-windows   diagnostic subscriptions without an Excel process
 ```
@@ -48,22 +50,35 @@ FXRATES(...) / FXRANGE(...)         Excel-DNA UDF: coerce args, build FxQuery / 
   IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
 ```
 
-Bad arguments are rejected before any HTTP call (the UDF returns `#VALUE!` and says why). Everything after that
-comes back as an `FxError` — `InvalidRequest`, `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can
+Bad arguments are rejected before any HTTP call (the UDF returns `#VALUE!` and records why). `FxQuery` validates
+the pair and date window; the transport rechecks dates before padding the request bounds. Dates must be between
+1970-01-01 and today (UTC), inclusive. This is a supported input range, not a promise of Yahoo coverage.
+
+Service failures come back as an `FxError` — `InvalidRequest`, `NoData`, `ProviderUnavailable` or `Unexpected` — so the UDF can
 pick an Excel error and record the detail for `FXLASTERROR()` and the trace log. A missing *individual* date is not
 an error: `FXRANGE` returns `#N/A` in that cell and keeps the rest of the block intact.
+
+Caller cancellation propagates to Excel-DNA without being recorded as a provider failure. A request timeout
+with the caller's token still active is retried by the provider.
+
+`FXLASTERROR()` subscribes to `LastErrorObservable` through `ExcelAsyncUtil.Observe`. Failures from any FX UDF,
+including `FXSYMBOL`, update that shared diagnostic. New subscribers receive the latest message; disposing a
+subscription stops its notifications. The message is global to the add-in, so concurrent requests can replace
+one another's diagnostics, and a successful request does not clear it.
 
 ## Building and debugging (Windows)
 
 Requirements:
 
-- Visual Studio 2022 **17.14 or newer**, or **Visual Studio 2026** (Community is fine) — anything that can
-  build .NET 10 projects. Include the *.NET desktop development* workload.
-- .NET 10 SDK (bundled with VS 2026)
+- .NET 10 SDK; check `dotnet --list-sdks` from the terminal you will use to build.
+- For IDE debugging, Visual Studio 2026 with the *.NET desktop development* workload (Community is fine).
+  Use a version compatible with your installed SDK; see Microsoft's
+  [SDK and Visual Studio support matrix](https://learn.microsoft.com/dotnet/core/porting/versioning-sdk-msbuild-vs).
 - Excel (64-bit recommended; the build also emits a 32-bit `.xll`)
 
 ```
 git clone <this repo>
+cd xlyfinance
 start XlyFinance.sln     # or open the folder in Visual Studio
 dotnet build
 dotnet test
@@ -79,37 +94,54 @@ dotnet test
 ### F5 debugging
 
 Set `XlyFinance.AddIn` as the startup project and press **F5**. Excel-DNA writes
-`Properties\launchSettings.json` on build with an `Excel` profile that runs `EXCEL.EXE /x "XlyFinance64.xll"`,
-so the unpacked add-in is loaded for the debug session and breakpoints in `FxFunctions` and `XlyFinance.Core`
-are hit. The file is generated (and rewritten on every build), so it is git-ignored.
+`Properties\launchSettings.json` during a Visual Studio build with an Excel launch profile for the installed
+Excel bitness, so the unpacked add-in is loaded for the debug session and breakpoints in `FxFunctions` and `XlyFinance.Core`
+are hit. The file is generated and git-ignored; a normal command-line build does not generate it by default.
 
-If Excel starts but `=FXRATES(...)` says `#NAME?`, Excel was launched in a different working directory and never
-found the `.xll` (the profile passes a bare file name, and the build task rewrites it on every build). Load the
-add-in by hand as above, then use *Debug → Attach to Process… → EXCEL.EXE* — breakpoints work the same.
+If Excel starts but `=FXRATES(...)` says `#NAME?`, check that the add-in was loaded and the launch profile points
+to the right `.xll`. Load the unpacked add-in through *File → Options → Add-ins → Excel Add-ins → Go… → Browse…*,
+then use *Debug → Attach to Process… → EXCEL.EXE* — breakpoints work the same.
 
 Either way, **close Excel before rebuilding**: the loaded `.xll` is locked and the build fails with a
 file-in-use error.
 
 ### Visual Studio refuses `net10.0-windows`
 
-That TFM needs VS 2022 17.14+ (or VS 2026) and the .NET 10 SDK. Either update, or retarget all three projects
-to `net8.0-windows` / `net8.0` (Excel-DNA 1.9 supports it; nothing else changes).
+Targeting .NET 10 in Visual Studio 2022 is unsupported. Use Visual Studio 2026 with a compatible .NET 10 SDK,
+or build from the command line with the SDK. Keep the repository's target frameworks and C# 14 setting intact.
 
 ## Working off Windows
 
 `XlyFinance.Core` and its tests are plain `net10.0`, so they build and run on any OS with the .NET 10 SDK.
 `XlyFinance.AddIn` and its tests target `net10.0-windows`. The diagnostic subscription tests can run without
 Excel, including on Linux; they do not exercise the native Excel host or COM registration.
-Building the add-in off Windows needs `dotnet build -p:EnableWindowsTargeting=true`.
+The current solution builds and its tests run on Linux with the .NET 10 SDK using the same `dotnet build`
+and `dotnet test` commands. Loading the resulting `.xll` and testing COM/RTD behavior still requires Windows Excel.
 
-Line endings are normalised by `.gitattributes` (`* text=auto`, `.sln`/`.csproj` kept as-is), and
+If a user-local SDK is installed but `dotnet` is not on `PATH`, invoke `~/.dotnet/dotnet` directly or add
+`~/.dotnet` to your shell's `PATH`. On Linux, the SDK also needs its native dependencies, including ICU.
+In a minimal environment without ICU, prefix the commands with `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1`;
+this can emit package locale warnings and does not verify behavior with full globalization support.
+
+Line endings are normalised by `.gitattributes` (`* text=auto`, `.sln`/`.csproj` checked out as CRLF), and
 `.editorconfig` carries the C# style rules the code already follows.
 
 ## Testing
 
-`dotnet test` covers the domain, the retry policy and the JSON mapping; it does not call Yahoo. The live path
-was checked by hand against `EURUSD=X`, including a weekend-only window and a bogus ticker. Fake transports
-live in `tests/XlyFinance.Tests/Fakes/`.
+`dotnet test` runs both test projects without calling Yahoo or starting Excel. Core tests cover date parsing,
+date limits, query validation, history cleanup, lookups, retries, cancellation and chart JSON mapping, including
+historical daylight-saving rules and missing/unknown timezones. Fake transports live in
+`tests/XlyFinance.Tests/Fakes/`. Add-in tests exercise diagnostic subscriptions with recording observers.
+
+For a focused run:
+
+```sh
+dotnet test tests/XlyFinance.Tests/XlyFinance.Tests.csproj
+dotnet test tests/XlyFinance.AddIn.Tests/XlyFinance.AddIn.Tests.csproj
+```
+
+Unit tests do not verify Excel function registration, spill behavior or COM/RTD delivery. Run the manual smoke
+test below for those changes and record the outcome separately from automated results.
 
 The RTD UDFs (`FXRATES`, `FXRANGE`, `FXLASTERROR`) are deliberately **not** marked `IsThreadSafe`. Excel-DNA's async
 support is RTD based, and letting Excel call it from a worker thread races with the RTD COM registration, which
@@ -126,7 +158,10 @@ After changes to the Excel integration, smoke test in Windows Excel with automat
 3. Delete A1, then trigger another failure with `=FXRANGE("EURUSD","not a date")` in B2.
    A2 should update; re-entering `=FXLASTERROR()` in A1 should show that latest failure immediately.
 4. Check that dates before 1970 and future dates give `#VALUE!` with a date-limit diagnostic, while a normal
-   historical request still returns rates.
+   historical request still returns rates. Use `=FXRATES("EURUSD","1969-12-31","2024-01-05")` and
+   `=FXRATES("EURUSD","2024-01-01",TODAY()+2)` for the invalid cases.
+5. Check `=FXRATES("EURUSD","2024-01-01","2024-01-10")` spills date/close columns and
+   `=FXRANGE("EURUSD","2024-01-06")` returns `#N/A` for the Saturday.
 
 ## The data source
 
@@ -156,11 +191,12 @@ Design-level constraints and the obvious follow-ups:
   fallback (ECB reference rates, another vendor) can be dropped in without touching the UDFs.
 - `YahooFinanceApi` 2.3.3 is *not* used: its history method calls `v7/finance/download`, which wants a session
   cookie and crumb and now answers HTTP 401 for every symbol, valid or not (checked across pairs and ranges).
-- No disk cache: every distinct argument set hits the network. An on-disk cache keyed by symbol + date would be
+- No disk cache: a new RTD topic fetches history from the network. An on-disk cache keyed by symbol + date would be
   the obvious next win for large sheets.
 - One pair per call. A multi-pair matrix function would be a separate UDF over the same service.
-- The async value is cached by argument; there is no explicit "refresh now" function yet (forcing a rebuild of
-  the workbook is the current workaround).
+- The async value is cached by argument; there is no explicit "refresh now" function yet. Change an argument
+  to create a new topic, or restart Excel to clear the in-memory topics. F9 is not a refresh mechanism for
+  cached history. Failed results are cached too, so repeat these steps after a transient outage.
 - Close only. `YahooDailyBar`/`FxRate` are the extension points if OHLCV output is wanted later.
 - Excel's 1900 date system is assumed (`ExcelSerialDate`). The 1904 (old Mac) system is not handled.
 - Daily FX bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving
