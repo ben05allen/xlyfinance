@@ -55,4 +55,33 @@ public class FxQueryTests
         Assert.Null(query);
         Assert.NotNull(error);
     }
+    [Theory]
+    [InlineData(1, 1, 1)]
+    [InlineData(1969, 12, 31)]
+    public void Rejects_dates_before_1970(int year, int month, int day)
+    {
+        Assert.False(FxQuery.TryCreate("EURUSD", new DateOnly(year, month, day),
+            new DateOnly(2024, 1, 1), out var query, out var error));
+
+        Assert.Null(query);
+        Assert.Contains("1970-01-01", error);
+    }
+
+    [Fact]
+    public void Accepts_the_supported_boundaries()
+    {
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        Assert.True(FxQuery.TryCreate("EURUSD", new DateOnly(1970, 1, 1), today, out _, out _));
+    }
+
+    [Fact]
+    public void Rejects_future_dates()
+    {
+        var tomorrow = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1);
+        Assert.False(FxQuery.TryCreate("EURUSD", new DateOnly(2024, 1, 1), tomorrow,
+            out var query, out var error));
+
+        Assert.Null(query);
+        Assert.Contains("today", error);
+    }
 }

@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\XlyFinance.Core\XlyFinance.Core.csproj" />
+    <InternalsVisibleTo Include="XlyFinance.AddIn.Tests" />
   </ItemGroup>
 
 </Project>

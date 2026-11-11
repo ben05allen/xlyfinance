@@ -27,7 +27,7 @@ All four are in the *Xly Finance* category of Excel's function wizard.
 | `FXRATES(pair, start_date, end_date)` | Spilled 2-column array: date serial, close. `#N/A` when Yahoo has no observations in the window, `#VALUE!` when the request is invalid or Yahoo could not be reached. |
 | `FXRANGE(pair, dates)` | Close for each date in the given cell/range, laid out like the range (a 4x1 range gives 4x1, a 1x4 row gives 1x4, one cell gives one value). `#N/A` per date with no fixing; the whole call fails with `#VALUE!` if any cell is not a date. |
 | `FXSYMBOL(pair)` | The Yahoo ticker for a pair, e.g. `FXSYMBOL("eur/usd")` → `EURUSD=X`. Handy for sanity checks. |
-| `FXLASTERROR()` | The message behind the most recent `FXRATES`/`FXRANGE` failure. Excel errors such as `#VALUE!` carry no detail, this does. |
+| `FXLASTERROR()` | Automatically updates with the message behind the most recent `FXRATES`/`FXRANGE` failure. Excel errors such as `#VALUE!` carry no detail, this does. |
 
 Notes on the data:
 
@@ -89,9 +89,12 @@ The same file is what you hand to a colleague (32-bit Excel needs `XlyFinance-pa
 - Yahoo's `v8/finance/chart` endpoint is **unofficial**: it needs no session but can throttle, and it is under
   no obligation to keep working.
 - Daily **closes only**, one pair per call. No OHLCV, no multi-pair matrix.
+- History requests support dates from **1970-01-01 through today (UTC)**. Earlier and future dates return
+  `#VALUE!`; actual history availability depends on Yahoo and the pair.
 - Excel's 1900 date system is assumed; the 1904 (old Mac) system is not handled.
 - Bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving rules),
-  not shifted to your machine's local timezone.
+  not shifted to your machine's local timezone. If the exchange timezone is missing or cannot be resolved,
+  the request fails with a diagnostic rather than guessing dates from a fixed offset.
 - `FXRATES` is async: it shows `#GETTING_DATA` for a moment and then fills. Excel 365 spills the result; in
   older Excel the formula has to be entered as an array (`Ctrl+Shift+Enter`).
 - There is no explicit "refresh now" function — values are cached per argument set (see the notes above).

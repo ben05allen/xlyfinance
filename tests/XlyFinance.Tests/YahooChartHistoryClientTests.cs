@@ -77,21 +77,43 @@ public class YahooChartHistoryClientTests
         Assert.Equal(new DateOnly(2024, 1, 1), bars[1].Date);
     }
 
-    [Fact]
-    public async Task Falls_back_to_the_reported_offset_when_the_timezone_is_unknown()
+    [Theory]
+    [InlineData("", false)]
+    [InlineData(",\"exchangeTimezoneName\":\"\"", false)]
+    [InlineData(",\"exchangeTimezoneName\":\"Unknown/Exchange\"", true)]
+    public async Task Rejects_unavailable_timezones_instead_of_using_the_current_offset(
+        string timezoneProperty, bool permanent)
     {
-        // gmtoffset +3600 with a 23:00 UTC timestamp means the bar belongs to the next day locally.
-        const string payload = """
-            {"chart":{"result":[{"meta":{"gmtoffset":3600},
-            "timestamp":[1704322800],
-            "indicators":{"quote":[{"close":[1.1]}]}}],"error":null}}
-            """;
-
+        // London summer midnight, but a current winter offset: the old fallback dated this June 30.
+        var payload = "{\"chart\":{\"result\":[{\"meta\":{\"gmtoffset\":0" + timezoneProperty
+            + "},\"timestamp\":[1719788400],\"indicators\":{\"quote\":[{\"close\":[1.1]}]}}],\"error\":null}}";
         var client = new YahooChartHistoryClient(new HttpClient(StubHttpMessageHandler.Json(payload)));
-        var bars = await client.GetDailyBarsAsync("EURUSD=X", new DateOnly(2024, 1, 1), new DateOnly(2024, 1, 10));
 
-        var bar = Assert.Single(bars);
-        Assert.Equal(new DateOnly(2024, 1, 4), bar.Date);
+        var exception = await Record.ExceptionAsync(async () => await client.GetDailyBarsAsync(
+            "EURUSD=X", new DateOnly(2024, 6, 30), new DateOnly(2024, 7, 1)));
+
+        Assert.NotNull(exception);
+        if (permanent)
+            Assert.IsType<FxDataException>(exception);
+        else
+            Assert.IsType<HttpRequestException>(exception);
+        Assert.Contains("timezone", exception.Message);
+    }
+
+    [Theory]
+    [InlineData(1, 1, 1, 2024, 1, 1)]
+    [InlineData(1969, 12, 31, 2024, 1, 1)]
+    [InlineData(2024, 1, 1, 9999, 12, 31)]
+    public async Task Rejects_unsupported_dates_before_sending_a_request(
+        int startYear, int startMonth, int startDay, int endYear, int endMonth, int endDay)
+    {
+        var handler = StubHttpMessageHandler.Json(EurUsdPayload);
+        var client = new YahooChartHistoryClient(new HttpClient(handler));
+
+        await Assert.ThrowsAsync<FxDataException>(async () => await client.GetDailyBarsAsync(
+            "EURUSD=X", new DateOnly(startYear, startMonth, startDay), new DateOnly(endYear, endMonth, endDay)));
+
+        Assert.Empty(handler.RequestUris);
     }
 
     [Fact]
@@ -212,7 +234,7 @@ public class YahooChartHistoryClientTests
     public async Task Returns_no_bars_when_the_range_holds_no_sessions()
     {
         const string payload = """
-            {"chart":{"result":[{"meta":{"gmtoffset":0},"timestamp":[1704412800],
+            {"chart":{"result":[{"meta":{"gmtoffset":0,"exchangeTimezoneName":"Europe/London"},"timestamp":[1704412800],
             "indicators":{"quote":[{"close":[1.09]}]}}],"error":null}}
             """;
 

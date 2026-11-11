@@ -5,8 +5,8 @@ enough.
 
 ## Tech stack and conventions
 
-- Target framework: `net10.0-windows` for `XlyFinance.AddIn`, plain `net10.0` for `XlyFinance.Core` and the
-  tests. Language: C# 14 (`LangVersion` is set centrally in `Directory.Build.props`).
+- Target framework: `net10.0-windows` for `XlyFinance.AddIn` and its tests, plain `net10.0` for
+  `XlyFinance.Core` and its tests. Language: C# 14 (`LangVersion` is set centrally in `Directory.Build.props`).
 - Key package: `ExcelDna.AddIn` / `ExcelDna.Integration` 1.9.0.
 - Yahoo FX data is read from the public `v8/finance/chart` endpoint over `HttpClient` +
   `System.Text.Json`. `YahooFinanceApi` is deliberately **not** used (see
@@ -17,8 +17,7 @@ enough.
   wrapper methods.
 - `AGENTS.md` states the same rules for AI assistants working in this repo.
 
-Before you commit: `dotnet build` must be clean and `dotnet test` must pass (116 tests, none of them hit
-Yahoo).
+Before you commit: `dotnet build` must be clean and `dotnet test` must pass. No unit tests hit Yahoo.
 
 ## Repository layout
 
@@ -31,6 +30,7 @@ src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   Dates/, Excel/            loose date parsing, range flattening, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
 tests/XlyFinance.Tests/     net10.0   xUnit tests: domain, provider retries, and transport against canned payloads
+tests/XlyFinance.AddIn.Tests/ net10.0-windows   diagnostic subscriptions without an Excel process
 ```
 
 The rule of thumb: `XlyFinance.AddIn` knows about Excel, `XlyFinance.Core` knows about data, and only
@@ -97,8 +97,9 @@ to `net8.0-windows` / `net8.0` (Excel-DNA 1.9 supports it; nothing else changes)
 
 ## Working off Windows
 
-`XlyFinance.Core` and the tests are plain `net10.0`, so they build and run on any OS with the .NET 10 SDK.
-Only `XlyFinance.AddIn` is Windows specific (`net10.0-windows`), because Excel-DNA builds the `.xll` there.
+`XlyFinance.Core` and its tests are plain `net10.0`, so they build and run on any OS with the .NET 10 SDK.
+`XlyFinance.AddIn` and its tests target `net10.0-windows`. The diagnostic subscription tests can run without
+Excel, including on Linux; they do not exercise the native Excel host or COM registration.
 Building the add-in off Windows needs `dotnet build -p:EnableWindowsTargeting=true`.
 
 Line endings are normalised by `.gitattributes` (`* text=auto`, `.sln`/`.csproj` kept as-is), and
@@ -110,11 +111,22 @@ Line endings are normalised by `.gitattributes` (`* text=auto`, `.sln`/`.csproj`
 was checked by hand against `EURUSD=X`, including a weekend-only window and a bogus ticker. Fake transports
 live in `tests/XlyFinance.Tests/Fakes/`.
 
-Two async UDFs (`FXRATES`, `FXRANGE`) are deliberately **not** marked `IsThreadSafe`. Excel-DNA's async
+The RTD UDFs (`FXRATES`, `FXRANGE`, `FXLASTERROR`) are deliberately **not** marked `IsThreadSafe`. Excel-DNA's async
 support is RTD based, and letting Excel call it from a worker thread races with the RTD COM registration, which
 shows up as `RTD server ... could not be registered` in the diagnostics log (Excel-DNA issue #667). The slow work
-already runs on the thread pool, so there is nothing to gain from the flag. `FXSYMBOL`/`FXLASTERROR` are pure, so
-they do keep it.
+already runs on the thread pool, so there is nothing to gain from the flag. `FXSYMBOL` keeps it.
+`FXLASTERROR` uses `ExcelAsyncUtil.Observe` to push diagnostic changes to existing cells. Subscription tests
+cover background updates, initial delivery of the latest error, multiple subscribers and disposal.
+
+After changes to the Excel integration, smoke test in Windows Excel with automatic calculation enabled:
+
+1. Load the newly built add-in into a fresh Excel process and enter `=FXLASTERROR()` in A1 and A2.
+2. Enter `=FXRATES("ABCDEF","2024-01-01","2024-01-05")` in B1. When Yahoo rejects the ticker,
+   both diagnostic cells should update without pressing F9 or editing them.
+3. Delete A1, then trigger another failure with `=FXRANGE("EURUSD","not a date")` in B2.
+   A2 should update; re-entering `=FXLASTERROR()` in A1 should show that latest failure immediately.
+4. Check that dates before 1970 and future dates give `#VALUE!` with a date-limit diagnostic, while a normal
+   historical request still returns rates.
 
 ## The data source
 
@@ -123,9 +135,11 @@ they do keep it.
 - No session, cookie or crumb: only a browser-style `User-Agent` header.
 - The requested window is widened by a day at each end and trimmed locally, because Yahoo rounds bounds to
   whole sessions in the exchange's timezone.
+- Dates must fall between 1970-01-01 and today (UTC), validated before HTTP requests or retry attempts.
 - Bars are dated with the exchange's timezone (`meta.exchangeTimezoneName`) and the rules in force on that
   date, so a summer bar is not shifted by the exchange's current UTC offset. Closes are parsed straight into
-  `decimal`; null or zero closes are dropped.
+  `decimal`; null or zero closes are dropped. Missing or unresolvable timezones cause a failure; the current
+  `gmtoffset` is never substituted for historical timezone rules.
 - Responses are classified by HTTP status: 400/404/410 (or an inline error on a 200) means the request cannot
   succeed, so it fails immediately with Yahoo's message. Timeouts, throttling and 5xx are retried three times
   with a doubling delay (15 second timeout per attempt, so at worst ~45 seconds of `#GETTING_DATA`), and a

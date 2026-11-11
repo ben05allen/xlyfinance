@@ -25,7 +25,7 @@ public static class FxFunctions
     private static readonly Lazy<FxHistoryService> Service =
         new(CreateService, LazyThreadSafetyMode.ExecutionAndPublication);
 
-    private static string? _lastError;
+    private static readonly LastErrorObservable LastError = new();
 
     /// <summary>
     /// Loads daily closes for a currency pair and spills them into two columns: date and close.
@@ -122,10 +122,10 @@ public static class FxFunctions
     [ExcelFunction(
         Name = "FXLASTERROR",
         Category = Category,
-        Description = "Returns the message of the most recent FXRATES or FXRANGE failure.",
-        IsThreadSafe = true)]
+        Description = "Returns and automatically updates the message of the most recent FX failure.")]
+    // Observe uses RTD, so this must run on Excel's main thread, like the fetching functions.
     public static object FxLastError() =>
-        Volatile.Read(ref _lastError) ?? "No FX failure has been recorded since Excel started.";
+        ExcelAsyncUtil.Observe("FXLASTERROR", Array.Empty<object>(), () => LastError);
 
     private static FxHistoryService CreateService()
     {
@@ -225,7 +225,7 @@ public static class FxFunctions
     {
         var text = string.IsNullOrWhiteSpace(message) ? "Unknown FX failure." : message!;
 
-        Volatile.Write(ref _lastError, text);
+        LastError.Publish(text);
         SafeLog(text);
 
         if (exception is not null)

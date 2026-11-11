@@ -8,6 +8,9 @@ namespace XlyFinance.Core;
 /// </summary>
 public sealed record FxQuery
 {
+    /// <summary>Earliest supported history date; actual availability depends on the pair.</summary>
+    public static readonly DateOnly EarliestDate = new(1970, 1, 1);
+
     private FxQuery(string symbol, DateOnly start, DateOnly end)
     {
         Symbol = symbol;
@@ -46,13 +49,40 @@ public sealed record FxQuery
         if (!FxPair.TryNormalize(pair, out var symbol, out error))
             return false;
 
+        if (!TryValidateDates(start, end, out error))
+            return false;
+
+        query = new FxQuery(symbol, start, end);
+        return true;
+    }
+
+    /// <summary>Checks the supported history window, also used before transport request padding.</summary>
+    public static bool TryValidateDates(
+        DateOnly start,
+        DateOnly end,
+        [NotNullWhen(false)] out string? error)
+    {
+        error = null;
+
         if (start > end)
         {
             error = $"start_date ({Format(start)}) must be on or before end_date ({Format(end)}).";
             return false;
         }
 
-        query = new FxQuery(symbol, start, end);
+        if (start < EarliestDate)
+        {
+            error = $"FX history dates must be on or after {Format(EarliestDate)}.";
+            return false;
+        }
+
+        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        if (end > today)
+        {
+            error = $"FX history dates must be on or before today ({Format(today)}, UTC).";
+            return false;
+        }
+
         return true;
     }
 

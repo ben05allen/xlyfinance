@@ -59,8 +59,8 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(symbol);
 
-        if (endInclusive < startInclusive)
-            throw new ArgumentException("The end date must not precede the start date.", nameof(endInclusive));
+        if (!FxQuery.TryValidateDates(startInclusive, endInclusive, out var error))
+            throw new FxDataException(error);
 
         var requestUri = BuildRequestUri(symbol, startInclusive, endInclusive);
 
@@ -142,7 +142,7 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
         if (closes.GetArrayLength() != count)
             throw UnexpectedResponse($"the series has {count} timestamps but {closes.GetArrayLength()} closes");
 
-        var exchangeTimeZone = ResolveExchangeTimeZone(series, out var offsetSeconds);
+        var exchangeTimeZone = ResolveExchangeTimeZone(series);
 
         for (var i = 0; i < count; i++)
         {
@@ -153,7 +153,7 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
             if (timestamp.ValueKind != JsonValueKind.Number || close.ValueKind != JsonValueKind.Number)
                 continue;
 
-            var date = ToTradingDate(timestamp.GetInt64(), exchangeTimeZone, offsetSeconds);
+            var date = ToTradingDate(timestamp.GetInt64(), exchangeTimeZone);
 
             if (date < startInclusive || date > endInclusive)
                 continue;
@@ -176,45 +176,33 @@ public sealed class YahooChartHistoryClient : IYahooHistoryClient
     /// summer bar by an hour and, for a midnight-local stamp, onto the previous calendar day.
     /// </remarks>
     /// <param name="series">The chart result element, which carries <c>meta</c>.</param>
-    /// <param name="offsetSeconds">The reported current offset, used only if the timezone cannot be resolved.</param>
-    private static TimeZoneInfo? ResolveExchangeTimeZone(JsonElement series, out int offsetSeconds)
+    private static TimeZoneInfo ResolveExchangeTimeZone(JsonElement series)
     {
-        offsetSeconds = 0;
-
-        if (!series.TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object)
-            return null;
-
-        if (meta.TryGetProperty("gmtoffset", out var offsetElement) && offsetElement.TryGetInt32(out var offset))
-            offsetSeconds = offset;
-
-        if (!meta.TryGetProperty("exchangeTimezoneName", out var nameElement) || nameElement.ValueKind != JsonValueKind.String)
-            return null;
+        if (!series.TryGetProperty("meta", out var meta) || meta.ValueKind != JsonValueKind.Object
+            || !meta.TryGetProperty("exchangeTimezoneName", out var nameElement)
+            || nameElement.ValueKind != JsonValueKind.String)
+            throw UnexpectedResponse("the exchange timezone is missing; historical rates cannot be dated accurately");
 
         var name = nameElement.GetString();
         if (string.IsNullOrWhiteSpace(name))
-            return null;
+            throw UnexpectedResponse("the exchange timezone is blank; historical rates cannot be dated accurately");
 
         try
         {
             return TimeZoneInfo.FindSystemTimeZoneById(name);
         }
-        catch (TimeZoneNotFoundException)
+        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException)
         {
-            return null;
-        }
-        catch (InvalidTimeZoneException)
-        {
-            return null;
+            throw new FxDataException(
+                $"Cannot resolve exchange timezone '{name}'; historical rates cannot be dated accurately.", ex);
         }
     }
 
-    private static DateOnly ToTradingDate(long unixSeconds, TimeZoneInfo? exchangeTimeZone, int offsetSeconds)
+    private static DateOnly ToTradingDate(long unixSeconds, TimeZoneInfo exchangeTimeZone)
     {
         var utc = DateTimeOffset.FromUnixTimeSeconds(unixSeconds).UtcDateTime;
 
-        return exchangeTimeZone is null
-            ? DateOnly.FromDateTime(utc.AddSeconds(offsetSeconds))
-            : DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utc, exchangeTimeZone));
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(utc, exchangeTimeZone));
     }
 
     /// <summary>

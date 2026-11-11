@@ -127,6 +127,20 @@ public class FxClosesLookupTests
             async () => await new FxHistoryService(provider).GetClosesAsync("EURUSD", [new DateOnly(2024, 1, 1)], cancellation.Token));
     }
 
+    [Theory]
+    [InlineData(1969, 12, 31)]
+    [InlineData(9999, 12, 31)]
+    public async Task Rejects_unsupported_lookup_dates_without_calling_the_provider(int year, int month, int day)
+    {
+        var provider = new StubFxHistoryProvider(Array.Empty<FxRate>());
+        var result = await new FxHistoryService(provider).GetClosesAsync(
+            "EURUSD", [new DateOnly(2024, 1, 1), new DateOnly(year, month, day)]);
+
+        Assert.False(result.Success);
+        Assert.Equal(FxErrorKind.InvalidRequest, result.Error!.Kind);
+        Assert.Null(provider.RequestedSymbol);
+    }
+
     private static FxRate Rate(int year, int month, int day, decimal close) =>
         new(new DateOnly(year, month, day), close);
 }
