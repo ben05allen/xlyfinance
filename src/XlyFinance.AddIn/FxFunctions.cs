@@ -22,8 +22,12 @@ public static class FxFunctions
 {
     private const string Category = "Xly Finance";
 
+    private static readonly Lazy<CachedFxHistoryProvider> Cache = new(
+        () => new CachedFxHistoryProvider(new YahooFxHistoryProvider(new YahooChartHistoryClient())),
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
     private static readonly Lazy<FxHistoryService> Service =
-        new(CreateService, LazyThreadSafetyMode.ExecutionAndPublication);
+        new(() => new FxHistoryService(Cache.Value), LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static readonly LastErrorObservable LastError = new();
 
@@ -50,6 +54,7 @@ public static class FxFunctions
         // already in memory instead of hitting Yahoo Finance on every recalculation.
         var key = new object[]
         {
+            Cache.Value.Generation.ToString(CultureInfo.InvariantCulture),
             query.Symbol,
             query.Start.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
             query.End.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
@@ -87,6 +92,7 @@ public static class FxFunctions
         // column of them is too long to put in a topic verbatim.
         var key = new object[]
         {
+            Cache.Value.Generation.ToString(CultureInfo.InvariantCulture),
             symbol,
             $"{grid.Rows}x{grid.Columns}",
             TopicHash(grid.Dates),
@@ -127,10 +133,24 @@ public static class FxFunctions
     public static object FxLastError() =>
         ExcelAsyncUtil.Observe("FXLASTERROR", Array.Empty<object>(), () => LastError);
 
-    private static FxHistoryService CreateService()
+    /// <summary>Refreshes FX formulas across all workbooks open in this Excel instance.</summary>
+    [ExcelCommand(Name = "FXREFRESH", MenuName = Category, MenuText = "Refresh FX rates",
+        Description = "Clears cached history and refreshes FX formulas in all open workbooks.")]
+    public static void FxRefresh()
     {
-        var provider = new YahooFxHistoryProvider(new YahooChartHistoryClient());
-        return new FxHistoryService(provider);
+        RefreshRates(() =>
+        {
+            dynamic application = ExcelDnaUtil.Application;
+            application.CalculateFull();
+        });
+    }
+
+    internal static long RefreshGeneration => Cache.Value.Generation;
+
+    internal static void RefreshRates(Action recalculate)
+    {
+        Cache.Value.Clear();
+        recalculate();
     }
 
     private static async Task<object> FetchAsync(FxQuery query, CancellationToken cancellationToken)

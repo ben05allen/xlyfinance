@@ -34,9 +34,8 @@ Notes on the data:
 - Bars are **daily closes** as reported by Yahoo Finance. Weekends and most market holidays have no bar at
   all — the array is not padded or forward-filled, so row counts can be shorter than the date range.
 - The pair is normalised: `EURUSD`, `eur/usd`, `EUR_USD` and `EURUSD=X` all resolve to `EURUSD=X`.
-- Recalculation with identical arguments reuses the value already fetched (Excel-DNA async/RTD caching), so
-  pressing F9 does not hammer Yahoo. Change an argument, or use the same arguments in a fresh workbook, to
-  force a new request.
+- Recalculation with identical arguments reuses the value already fetched, so pressing F9 does not hammer
+  Yahoo. `FXRATES` and `FXRANGE` also share a small in-memory history cache across open workbooks.
 - Dates are returned as Excel serial numbers, so charts and date maths work. Format the column as a date
   (`Ctrl+1`) to see `2024-01-01` instead of `45292`.
 - A market holiday that Yahoo still reports a bar for (usually a repeat of the previous close) is kept as
@@ -69,8 +68,8 @@ A1:A6 (dates)          B1:B6  =FXRANGE("EURUSD", A1:A6)
 Requirements:
 
 - Excel (64-bit recommended; the build also emits a 32-bit `.xll`)
-- .NET 10 SDK — Visual Studio 2022 **17.14 or newer**, or **Visual Studio 2026** (Community is fine), with
-  the *.NET desktop development* workload
+- .NET 10 SDK; for IDE builds and debugging, Visual Studio 2026 (Community is fine) with the
+  *.NET desktop development* workload
 
 ```
 git clone <this repo>
@@ -83,6 +82,21 @@ The build writes a single-file add-in to
 *File → Options → Add-ins → Excel Add-ins → Go… → Browse…* → pick that file. Then type a formula.
 
 The same file is what you hand to a colleague (32-bit Excel needs `XlyFinance-packed.xll` instead).
+
+## Caching and refreshing
+
+Use **Add-ins → Xly Finance → Refresh FX rates** to fetch fresh history for FX formulas in all open
+workbooks. This clears the shared history cache and recalculates the workbooks, including formulas that
+previously returned errors. Formula arguments stay the same. The command is also available as the
+`FXREFRESH` macro, which can be assigned to a button; it is not a worksheet function.
+
+The cache lives only in memory and is limited to 64 date windows and 100,000 observations. A cached window
+can serve smaller requests for the same pair, including dates with no bar. Simultaneous requests share a
+fetch when an in-progress window covers them. Failures are not stored in the history cache.
+
+Historical windows expire after 24 hours; windows containing today (UTC) expire after five minutes. Expiry
+controls reuse by new requests. Existing worksheet results stay stable until **Refresh FX rates** is used;
+there is no background polling. Restarting Excel clears the cache too. Nothing is written to disk.
 
 ## Limitations
 
@@ -97,7 +111,7 @@ The same file is what you hand to a colleague (32-bit Excel needs `XlyFinance-pa
   the request fails with a diagnostic rather than guessing dates from a fixed offset.
 - `FXRATES` is async: it shows `#GETTING_DATA` for a moment and then fills. Excel 365 spills the result; in
   older Excel the formula has to be entered as an array (`Ctrl+Shift+Enter`).
-- There is no explicit "refresh now" function — values are cached per argument set (see the notes above).
+- Refresh applies to all open workbooks in the current Excel instance and performs a full recalculation.
 
 ## Troubleshooting
 
@@ -106,9 +120,8 @@ The same file is what you hand to a colleague (32-bit Excel needs `XlyFinance-pa
 - **`#VALUE!` with no explanation** — run `=FXLASTERROR()` in a cell; it holds the message from the last failure.
 - **`#N/A`** — Yahoo returned no rows for that pair/window. Check `=FXSYMBOL("...")` gives a real ticker and that
   the window contains trading days.
-- **Nothing refreshes** — identical arguments reuse the cached async value, which is the point (it keeps F9
-  cheap). Changing any argument (for example nudging the end date) creates a new topic and a new request;
-  closing and reopening the workbook also clears it.
+- **Nothing refreshes** — use **Add-ins → Xly Finance → Refresh FX rates**. F9 reuses existing async
+  results; editing an argument may still reuse a covering window from the history cache.
 
 ## Contributing
 

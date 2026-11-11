@@ -20,6 +20,17 @@ enough.
 
 Before you commit: `dotnet build` must be clean and `dotnet test` must pass. No unit tests hit Yahoo.
 
+## Versioning
+
+The shared product version is set in `Directory.Build.props`, currently **1.1.0**. The SDK derives assembly
+and file versions from it, keeping Core and the add-in aligned. Change this property rather than setting
+separate versions in each project.
+
+Use patch bumps for fixes, minor bumps for compatible features, and major bumps for breaking changes to
+worksheet functions or their behavior. Version 1.1.0 introduces the shared history cache and `FXREFRESH`
+command; existing formula signatures remain compatible. A version bump alone does not publish a release
+or create a Git tag.
+
 ## Repository layout
 
 ```
@@ -27,6 +38,7 @@ src/XlyFinance.Core/        net10.0   domain + Yahoo access, no Excel references
   FxPair, FxQuery           input normalisation and validation
   FxHistoryService          fetch orchestration, cleaning, lookups, error mapping
   IFxHistoryProvider        abstraction over the data source
+  CachedFxHistoryProvider  bounded window cache, shared fetches and refresh generation
   Providers/Yahoo/          IYahooHistoryClient + v8 chart HTTP client + retry provider
   Dates/, Excel/            loose date parsing, range flattening, Excel serial conversions
 src/XlyFinance.AddIn/       net10.0-windows   Excel-DNA UDFs, argument coercion, async plumbing
@@ -46,7 +58,8 @@ FXRATES(...) / FXRANGE(...)         Excel-DNA UDF: coerce args, build FxQuery / 
   ExcelAsyncUtil.RunTask…           async: returns #GETTING_DATA, then the array
   FxHistoryService                  GetDailyRatesAsync (clean, sort, dedupe) or
                                     GetClosesAsync (project closes onto the requested dates)
-  IFxHistoryProvider                YahooFxHistoryProvider: retries transient failures
+  IFxHistoryProvider                CachedFxHistoryProvider: reuse covering windows / pending fetches
+                                    YahooFxHistoryProvider: retries transient failures on a miss
   IYahooHistoryClient               YahooChartHistoryClient: v8/finance/chart HTTP call
 ```
 
@@ -65,6 +78,33 @@ with the caller's token still active is retried by the provider.
 including `FXSYMBOL`, update that shared diagnostic. New subscribers receive the latest message; disposing a
 subscription stops its notifications. The message is global to the add-in, so concurrent requests can replace
 one another's diagnostics, and a successful request does not clear it.
+
+### Cache and refresh
+
+`CachedFxHistoryProvider` decorates the Yahoo provider and is shared by both fetching UDFs across workbooks.
+It has no extra package dependencies, timers, disk files or prefetching. A window records the full requested
+coverage, including missing days; a same-pair subset can use it without another fetch. Partial overlaps are
+fetched separately rather than stitched together.
+
+- At most 64 completed windows and 100,000 observations are retained, evicting least recently used windows.
+  A response larger than the observation limit is returned without being stored. Returned data is read-only
+  and copied so neither the provider nor a caller can mutate cache contents.
+- Historical windows expire after 24 hours; windows ending today (UTC) expire after five minutes. Expiry is
+  checked on requests. `TimeProvider` makes expiry tests deterministic.
+- Pending covering requests share a fetch. Each caller can cancel its own wait; the shared fetch continues
+  under the Yahoo client's existing timeout/retry limits and may populate the cache even if all callers leave.
+- Successful empty responses are cached. Exceptions are propagated without a cache entry.
+
+`FXREFRESH` is an `[ExcelCommand]` under **Add-ins → Xly Finance → Refresh FX rates**, not a UDF. It clears
+the cache, increments its generation, then calls Excel's `Application.CalculateFull()` on the main thread.
+Both fetching UDFs include that generation in their async topic keys, so recalculation replaces old results
+and errors without changing worksheet arguments. A clear detaches earlier fetches; their eventual completion
+cannot restore stale cache entries or remove newer pending requests.
+
+There are two caching layers: expiry in the provider cache does not invalidate an existing Excel-DNA topic.
+Existing worksheet results change on explicit refresh or an argument change, not on a timer. `FXREFRESH`
+affects every open workbook and triggers full calculation, including unrelated formulas. Check command/menu
+registration and actual cell refresh in Windows Excel; unit tests cannot verify the native host behavior.
 
 ## Building and debugging (Windows)
 
@@ -130,8 +170,10 @@ Line endings are normalised by `.gitattributes` (`* text=auto`, `.sln`/`.csproj`
 
 `dotnet test` runs both test projects without calling Yahoo or starting Excel. Core tests cover date parsing,
 date limits, query validation, history cleanup, lookups, retries, cancellation and chart JSON mapping, including
-historical daylight-saving rules and missing/unknown timezones. Fake transports live in
-`tests/XlyFinance.Tests/Fakes/`. Add-in tests exercise diagnostic subscriptions with recording observers.
+historical daylight-saving rules and missing/unknown timezones. Cache tests cover reuse across service calls,
+expiry, size limits, shared fetches, cancellation isolation and clearing during outstanding requests. Fake
+transports live in `tests/XlyFinance.Tests/Fakes/`. Add-in tests exercise diagnostic subscriptions with
+recording observers and refresh ordering with an injected recalculation callback.
 
 For a focused run:
 
@@ -162,6 +204,14 @@ After changes to the Excel integration, smoke test in Windows Excel with automat
    `=FXRATES("EURUSD","2024-01-01",TODAY()+2)` for the invalid cases.
 5. Check `=FXRATES("EURUSD","2024-01-01","2024-01-10")` spills date/close columns and
    `=FXRANGE("EURUSD","2024-01-06")` returns `#N/A` for the Saturday.
+6. In two workbooks, enter FX formulas with identical and overlapping windows. Choose
+   **Add-ins → Xly Finance → Refresh FX rates** and confirm both workbooks' FX formulas fetch again without
+   editing arguments. Check the `FXREFRESH` macro can also be assigned to a button. If using a debugger,
+   break in `YahooChartHistoryClient.GetDailyBarsAsync` to count network requests; exact simultaneous windows
+   should share one fetch, and completed covering windows should serve subsets without another fetch.
+7. Disconnect the network, refresh and wait for a provider error; reconnect and refresh again. Confirm the
+   failed formula recovers. Also refresh while a fetch is pending, checking that the new topic supplies the
+   final result. Test with manual calculation enabled as well, since the command explicitly calculates.
 
 ## The data source
 
@@ -191,12 +241,11 @@ Design-level constraints and the obvious follow-ups:
   fallback (ECB reference rates, another vendor) can be dropped in without touching the UDFs.
 - `YahooFinanceApi` 2.3.3 is *not* used: its history method calls `v7/finance/download`, which wants a session
   cookie and crumb and now answers HTTP 401 for every symbol, valid or not (checked across pairs and ranges).
-- No disk cache: a new RTD topic fetches history from the network. An on-disk cache keyed by symbol + date would be
-  the obvious next win for large sheets.
+- No disk cache: history is shared in memory for the current Excel session only. New topics reuse covering
+  cached windows when available. Persisting data across sessions would need a separate design.
 - One pair per call. A multi-pair matrix function would be a separate UDF over the same service.
-- The async value is cached by argument; there is no explicit "refresh now" function yet. Change an argument
-  to create a new topic, or restart Excel to clear the in-memory topics. F9 is not a refresh mechanism for
-  cached history. Failed results are cached too, so repeat these steps after a transient outage.
+- The async value is cached by argument and refresh generation. F9 is not a refresh mechanism for cached
+  history. After a transient outage, use `FXREFRESH` to replace failed async topics and retry.
 - Close only. `YahooDailyBar`/`FxRate` are the extension points if OHLCV output is wanted later.
 - Excel's 1900 date system is assumed (`ExcelSerialDate`). The 1904 (old Mac) system is not handled.
 - Daily FX bars are dated in the exchange's timezone (Europe/London for FX, with historical daylight-saving
